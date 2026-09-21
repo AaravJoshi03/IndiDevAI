@@ -4564,33 +4564,4 @@ def main():
 # SECTION 26 — ENTRY POINT
 # ============================================================
 
-if __name__ == "__main__":
-    run_pipeline(verbose=True)
-
-    # Run ML pipeline after data pipeline to generate district_ml_results.csv
-    print("\n[ML] Running ML pipeline…")
-    ml_out = run_ml_pipeline()
-    ml_val = validate_ml_pipeline(ml_out)
-    km_res = ml_out["km_result"]
-    pca_r  = ml_out["pca_result"]
-    iso_r  = ml_out["iso_result"]
-
-    print(f"[ML] Selected K = {km_res['selected_k']} "
-          f"(silhouette = {km_res['evaluation_df'].sort_values('Silhouette', ascending=False).iloc[0]['Silhouette']:.4f})")
-    ev = pca_r["explained_var"]
-    print(f"[ML] PCA: PC1={ev[0]*100:.1f}%  PC2={ev[1]*100:.1f}%  "
-          f"PC1+PC2={( ev[0]+ev[1])*100:.1f}%")
-    print(f"[ML] Isolation Forest: {iso_r['n_anomalies']} unusual profiles "
-          f"({iso_r['n_anomalies']/len(ml_out['results_df'])*100:.1f}%)")
-
-    pass_n = len(ml_val["passed"])
-    warn_n = len(ml_val["warnings"])
-    err_n  = len(ml_val["errors"])
-    print(f"[ML] Validation: {pass_n} passed / {warn_n} warnings / {err_n} errors")
-    if ml_val["errors"]:
-        for e in ml_val["errors"]:
-            print(f"     ERROR: {e}")
-    if ml_val["warnings"]:
-        for w in ml_val["warnings"]:
-            print(f"     WARN:  {w}")
-    print("[ML] Pipeline complete.")
+main()
