@@ -78,6 +78,86 @@ PCA data to surface these district-level patterns.
 
 ---
 
+## Data Processing Methodology
+
+### Raw Census Variables
+
+The following columns are read directly from the Excel dataset without modification:
+
+| Group | Raw Columns |
+|-------|-------------|
+| Identifiers | `State`, `District`, `Subdistt`, `Level`, `Name`, `TRU` |
+| Households | `No_HH` |
+| Total Population | `TOT_P`, `TOT_M`, `TOT_F` |
+| Child Population (0–6) | `P_06`, `M_06`, `F_06` |
+| Scheduled Caste | `P_SC`, `M_SC`, `F_SC` |
+| Scheduled Tribe | `P_ST`, `M_ST`, `F_ST` |
+| Literate Population | `P_LIT`, `M_LIT`, `F_LIT` |
+| Illiterate Population | `P_ILL`, `M_ILL`, `F_ILL` |
+| Total Workers | `TOT_WORK_P`, `TOT_WORK_M`, `TOT_WORK_F` |
+| Main Workers | `MAINWORK_P`, `MAINWORK_M`, `MAINWORK_F` |
+| Main Cultivators | `MAIN_CL_P`, `MAIN_CL_M`, `MAIN_CL_F` |
+| Main Agricultural Labourers | `MAIN_AL_P`, `MAIN_AL_M`, `MAIN_AL_F` |
+| Main HH Industry | `MAIN_HH_P`, `MAIN_HH_M`, `MAIN_HH_F` |
+| Main Other Workers | `MAIN_OT_P`, `MAIN_OT_M`, `MAIN_OT_F` |
+| Marginal Workers | `MARGWORK_P`, `MARGWORK_M`, `MARGWORK_F` |
+| Marginal Cultivators | `MARG_CL_P`, `MARG_CL_M`, `MARG_CL_F` |
+| Marginal Agricultural Labourers | `MARG_AL_P`, `MARG_AL_M`, `MARG_AL_F` |
+| Marginal HH Industry | `MARG_HH_P`, `MARG_HH_M`, `MARG_HH_F` |
+| Marginal Other Workers | `MARG_OT_P`, `MARG_OT_M`, `MARG_OT_F` |
+| Non-Workers | `NON_WORK_P`, `NON_WORK_M`, `NON_WORK_F` |
+
+### Derived Project Features
+
+All derived features are computed in [`engineer_features()`](Aarav_IndiDevAI.py) using zero-denominator-guarded division. Every formula was verified against the Census of India 2011 definition before implementation.
+
+**Demographic Features**
+
+| Feature | Formula | Source Columns | Interpretation |
+|---------|---------|----------------|----------------|
+| `Sex_Ratio` | `(TOT_F / TOT_M) × 1000` | `TOT_F`, `TOT_M` | Females per 1,000 males; lower values indicate gender imbalance |
+| `Child_Pop_Pct` | `(P_06 / TOT_P) × 100` | `P_06`, `TOT_P` | Share of population aged 0–6; proxy for birth rate and child dependency |
+| `SC_Pop_Pct` | `(P_SC / TOT_P) × 100` | `P_SC`, `TOT_P` | Scheduled Caste population as share of total population |
+| `ST_Pop_Pct` | `(P_ST / TOT_P) × 100` | `P_ST`, `TOT_P` | Scheduled Tribe population as share of total population |
+
+**Education Features**
+
+> **Denominator note:** The Census of India defines the effective literacy rate as literate persons as a share of the population aged **7 and above** (children aged 0–6 are excluded because literacy is not enumerated for them). All literacy-rate denominators therefore subtract the 0–6 age-group column from the corresponding total population.
+
+| Feature | Formula | Source Columns | Interpretation |
+|---------|---------|----------------|----------------|
+| `Literacy_Rate` | `(P_LIT / (TOT_P − P_06)) × 100` | `P_LIT`, `TOT_P`, `P_06` | Effective literacy rate for population aged 7+ |
+| `Male_Literacy_Rate` | `(M_LIT / (TOT_M − M_06)) × 100` | `M_LIT`, `TOT_M`, `M_06` | Male effective literacy rate |
+| `Female_Literacy_Rate` | `(F_LIT / (TOT_F − F_06)) × 100` | `F_LIT`, `TOT_F`, `F_06` | Female effective literacy rate |
+| `Gender_Literacy_Gap` | `Male_Literacy_Rate − Female_Literacy_Rate` | derived | Percentage-point gap; positive = male advantage; negative = female advantage (e.g. Jaintia Hills, Meghalaya) |
+
+**Employment Features**
+
+| Feature | Formula | Source Columns | Interpretation |
+|---------|---------|----------------|----------------|
+| `Worker_Participation` | `(TOT_WORK_P / TOT_P) × 100` | `TOT_WORK_P`, `TOT_P` | Overall work participation rate (total workers as % of total population) |
+| `Female_Worker_Part` | `(TOT_WORK_F / TOT_F) × 100` | `TOT_WORK_F`, `TOT_F` | Female work participation rate |
+| `Main_Worker_Pct` | `(MAINWORK_P / TOT_WORK_P) × 100` | `MAINWORK_P`, `TOT_WORK_P` | Main workers as % of total workers (worked 6+ months/year) |
+| `Marginal_Worker_Pct` | `(MARGWORK_P / TOT_WORK_P) × 100` | `MARGWORK_P`, `TOT_WORK_P` | Marginal workers as % of total workers (worked <6 months/year) |
+| `Non_Worker_Pct` | `(NON_WORK_P / TOT_P) × 100` | `NON_WORK_P`, `TOT_P` | Non-workers as % of total population |
+| `Agri_Worker_Pct` | `((MAIN_CL_P + MAIN_AL_P) / TOT_WORK_P) × 100` | `MAIN_CL_P`, `MAIN_AL_P`, `TOT_WORK_P` | Combined main cultivators and main agricultural labourers as % of total workers |
+
+### Cleaning Operations Applied
+
+| Operation | Justification |
+|-----------|---------------|
+| Strip whitespace from string columns | Prevents mismatches in Level/TRU filtering |
+| Drop entirely-empty columns | 6 trailing placeholder columns (CQ–CV) contain no data |
+| Convert numeric Census columns from string to float | Raw Excel loaded with `dtype=str` to preserve zero-padded codes; explicit conversion required |
+| Drop districts with zero/missing `TOT_P` | Rates cannot be computed for zero-population records |
+
+**What was intentionally NOT done:**
+- Missing values were **not** filled with zero (NaN may represent genuinely absent populations)
+- No values were silently clipped or capped
+- Negative `Gender_Literacy_Gap` values (1 district: Jaintia Hills, Meghalaya) were retained — this is a real documented pattern in matrilineal societies, not a data error
+
+---
+
 ## Technology Stack
 
 | Layer | Technology |
@@ -221,11 +301,20 @@ The application will open in your default browser at `http://localhost:8501`.
 - Repository structure established
 - Dataset inspected and moved to `data/raw/`
 - `Aarav_IndiDevAI.py` created with full section scaffold
-- Data loading, validation, cleaning, and feature engineering functions implemented
-- Streamlit Home and Dataset Overview pages operational
-- Remaining dashboard sections are scaffolded with clear placeholders
 
-Next phase: Demographics, Education, and Employment analytical sections.
+**Phase 2 — Data Validation, Cleaning & Feature Engineering: ✅ Complete**
+
+- `load_dataset()` — file-existence check, structural column validation
+- `validate_dataset()` — 8-point quality check (dimensions, Level/TRU uniques, duplicates, missing values, state codes)
+- `clean_dataset()` — empty-column removal, numeric type conversion, negative-value audit
+- `filter_district_data()` — Level==DISTRICT & TRU==Total filter, duplicate-key check, zero-population removal
+- `engineer_features()` — 14 derived socioeconomic indicators (Census-correct denominators)
+- `validate_features()` — NaN / Inf / out-of-range checks for all derived features
+- `save_processed_data()` — writes `data/processed/district_analysis_ready.csv`
+- Pipeline verified: 640 districts, 35 states/UTs, 0 duplicates, 0 infinite values
+- One notable finding: Jaintia Hills (Meghalaya) shows negative Gender_Literacy_Gap — female literacy exceeds male; retained as valid data
+
+Next phase: Demographics, Education, and Employment Streamlit dashboard sections.
 
 ---
 
