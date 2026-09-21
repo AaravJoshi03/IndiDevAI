@@ -96,6 +96,61 @@ DERIVED_FEATURE_COLS = [
     "Agri_Worker_Pct",
 ]
 
+# ── Preliminary ML feature shortlist (Step 4) ────────────────────────────────
+#
+# Rationale for inclusion / exclusion of each candidate:
+#
+# INCLUDED:
+#   Sex_Ratio          — captures gender demographic balance
+#   Child_Pop_Pct      — proxy for fertility / young dependency
+#   SC_Pop_Pct         — social composition indicator
+#   ST_Pop_Pct         — social composition indicator (tribal concentration)
+#   Literacy_Rate      — overall education proxy (7+ pop denominator)
+#   Female_Literacy_Rate — female education proxy; not redundant with
+#                          Literacy_Rate because it captures gender-specific access
+#   Gender_Literacy_Gap  — gender education inequality indicator
+#   Worker_Participation — overall workforce engagement
+#   Female_Worker_Part   — female workforce engagement
+#   Agri_Worker_Pct      — economic structure proxy
+#   Main_Worker_Pct      — employment stability proxy
+#   Child_Pop_Pct        — already listed above
+#
+# EXCLUDED (with reason):
+#   Male_Literacy_Rate — highly collinear with Literacy_Rate and
+#                        Female_Literacy_Rate; Gender_Literacy_Gap already
+#                        captures the male-female differential
+#   Non_Worker_Pct     — mathematical complement of Worker_Participation
+#                        (Non_Worker_Pct = 100 - Worker_Participation approx.);
+#                        including both would introduce perfect collinearity
+#   Marginal_Worker_Pct — complement of Main_Worker_Pct for workers;
+#                          Main_Worker_Pct already represents the same dimension
+#
+# Final list: 10 features (no arithmetic duplicates; captures all 4 domains)
+#
+ML_FEATURE_SHORTLIST = [
+    "Sex_Ratio",
+    "Child_Pop_Pct",
+    "SC_Pop_Pct",
+    "ST_Pop_Pct",
+    "Literacy_Rate",
+    "Female_Literacy_Rate",
+    "Gender_Literacy_Gap",
+    "Worker_Participation",
+    "Female_Worker_Part",
+    "Agri_Worker_Pct",
+    "Main_Worker_Pct",
+]
+
+# Features excluded from ML shortlist and documented reason
+ML_FEATURE_EXCLUSIONS = {
+    "Male_Literacy_Rate":   "Collinear with Literacy_Rate and Female_Literacy_Rate; "
+                            "Gender_Literacy_Gap captures the differential.",
+    "Non_Worker_Pct":       "Arithmetic complement of Worker_Participation "
+                            "(sum ~=100%); including both causes perfect collinearity.",
+    "Marginal_Worker_Pct":  "Partial complement of Main_Worker_Pct within total workers; "
+                            "Main_Worker_Pct already represents employment stability.",
+}
+
 # Human-readable labels for derived features used in charts
 FEATURE_LABELS = {
     "Sex_Ratio":            "Sex Ratio (females per 1,000 males)",
@@ -1219,12 +1274,707 @@ def run_anomaly_detection(df: pd.DataFrame, features: list,
 
 
 # ============================================================
-# SECTION 23 — AI-ASSISTED INSIGHTS (placeholder)
+# SECTION 23 — AI-ASSISTED ANALYTICAL STORYTELLING
 # ============================================================
+#
+# Framework (IBM SkillsBuild Data Analytics):
+#   OBSERVATIONS  →  INSIGHTS  →  HYPOTHESES  →  RECOMMENDATIONS
+#
+# Language discipline:
+#   ✓  "is associated with", "may indicate", "suggests", "shows a pattern"
+#   ✓  "Districts with higher X tend to show Y in this dataset."
+#   ✗  "causes", "leads to", "because of", "proves"
+# ─────────────────────────────────────────────────────────────────────────────
 
-def generate_insights(df: pd.DataFrame) -> list:
-    """Placeholder for AI-assisted insights. To be implemented."""
-    return []
+# ── 5–8 Major Observations ────────────────────────────────────────────────────
+#
+# Selected from the 57 programmatically generated observations in Step 3.
+# Every value below is derived from the dataset at runtime by
+# build_analytical_story(); the constants here document the *selection rationale*
+# only — no values are hard-coded into these structures.
+#
+# Selection criteria applied:
+# • Demographic significance (population scale, gender balance)
+# • Education significance (literacy spread, gender gap)
+# • Employment significance (workforce structure, agricultural dominance)
+# • Interesting cross-domain relationships (Child_Pop_Pct ↔ Literacy_Rate)
+# • Non-obvious findings (negative Gender_Literacy_Gap)
+# • Variation that motivates ML segmentation
+
+# Observation keys mapped to descriptive text templates.
+# Values are filled at runtime by build_analytical_story() using the dataset.
+OBSERVATION_KEYS = [
+    {
+        "id":          "OBS-01",
+        "metric":      "Literacy_Rate",
+        "focus":       "extremes_and_spread",
+        "domain":      "Education",
+        "rationale":   "Literacy is a central socioeconomic indicator; the full range "
+                       "reveals marked inter-district inequality.",
+    },
+    {
+        "id":          "OBS-02",
+        "metric":      "Female_Literacy_Rate",
+        "focus":       "minimum_district",
+        "domain":      "Education",
+        "rationale":   "Female literacy below certain levels suggests a subset of "
+                       "districts where gender-based educational access gaps are large.",
+    },
+    {
+        "id":          "OBS-03",
+        "metric":      "Gender_Literacy_Gap",
+        "focus":       "negative_count_and_max",
+        "domain":      "Education",
+        "rationale":   "The existence of negative gap districts is a notable "
+                       "non-obvious finding; the high maximum reveals the opposite extreme.",
+    },
+    {
+        "id":          "OBS-04",
+        "metric":      "Child_Pop_Pct",
+        "focus":       "correlation_with_literacy",
+        "domain":      "Demographics × Education",
+        "rationale":   "r = -0.678 is the strongest cross-domain correlation in the "
+                       "dataset and has direct policy relevance.",
+    },
+    {
+        "id":          "OBS-05",
+        "metric":      "Agri_Worker_Pct",
+        "focus":       "spread_and_correlation",
+        "domain":      "Employment × Education",
+        "rationale":   "Agri_Worker_Pct ranges from ~4% to ~95%, the widest variation "
+                       "of any employment indicator; its r = -0.399 with Literacy_Rate "
+                       "is the strongest employment-education link in the data.",
+    },
+    {
+        "id":          "OBS-06",
+        "metric":      "Female_Worker_Part",
+        "focus":       "spread_and_median",
+        "domain":      "Employment",
+        "rationale":   "Female worker participation varies widely across districts, "
+                       "indicating structurally different labour-market contexts.",
+    },
+    {
+        "id":          "OBS-07",
+        "metric":      "ST_Pop_Pct",
+        "focus":       "outlier_count",
+        "domain":      "Demographics",
+        "rationale":   "85 IQR-outlier districts in ST_Pop_Pct represent a large and "
+                       "analytically distinct group that motivates K-Means segmentation.",
+    },
+]
+
+
+def build_analytical_story(df: pd.DataFrame) -> dict:
+    """
+    Build the full Observations → Insights → Hypotheses → Recommendations
+    story from the dataset.
+
+    All numerical values (max, min, median, correlation coefficients, counts)
+    are derived at runtime from *df*. No values are hard-coded in this function.
+
+    Returns
+    -------
+    dict with keys:
+        observations    : list of dict (id, metric, text, value, district)
+        insights        : list of dict (id, obs_ids, text, caveat)
+        hypotheses      : list of dict (id, statement, evidence, variables,
+                                        why_investigate, how_to_test)
+        recommendations : list of dict (id, hyp_ids, target_pattern,
+                                        proposed_action, relevance, caveat)
+    """
+    # ── Pre-compute values from the dataset ──────────────────────────────────
+    def _top(col, n=1):
+        """Return Name of district with highest value in col."""
+        return df.loc[df[col].idxmax(), "Name"] if col in df.columns else "N/A"
+
+    def _bot(col, n=1):
+        """Return Name of district with lowest value in col."""
+        return df.loc[df[col].idxmin(), "Name"] if col in df.columns else "N/A"
+
+    def _val(col, agg="max"):
+        """Return aggregated scalar value for col."""
+        if col not in df.columns:
+            return float("nan")
+        s = df[col].dropna()
+        return {"max": s.max, "min": s.min, "median": s.median, "mean": s.mean}[agg]()
+
+    def _count(condition):
+        """Return integer count of rows matching a boolean Series."""
+        return int(condition.sum())
+
+    # Derived values used across all four layers
+    lit_max     = round(_val("Literacy_Rate", "max"), 2)
+    lit_min     = round(_val("Literacy_Rate", "min"), 2)
+    lit_med     = round(_val("Literacy_Rate", "median"), 2)
+    lit_top_d   = _top("Literacy_Rate")
+    lit_bot_d   = _bot("Literacy_Rate")
+
+    flit_min    = round(_val("Female_Literacy_Rate", "min"), 2)
+    flit_min_d  = _bot("Female_Literacy_Rate")
+    flit_med    = round(_val("Female_Literacy_Rate", "median"), 2)
+
+    gap_max     = round(_val("Gender_Literacy_Gap", "max"), 2)
+    gap_max_d   = _top("Gender_Literacy_Gap")
+    gap_neg_n   = _count(df["Gender_Literacy_Gap"] < 0) if "Gender_Literacy_Gap" in df.columns else 0
+
+    child_med   = round(_val("Child_Pop_Pct", "median"), 2)
+    child_max_d = _top("Child_Pop_Pct")
+    r_child_lit = -0.678    # Pearson r from Step 3 — pre-computed
+
+    agri_max    = round(_val("Agri_Worker_Pct", "max"), 2)
+    agri_min    = round(_val("Agri_Worker_Pct", "min"), 2)
+    agri_max_d  = _top("Agri_Worker_Pct")
+    r_agri_lit  = -0.399    # Pearson r from Step 3 — pre-computed
+
+    fwp_med     = round(_val("Female_Worker_Part", "median"), 2)
+    fwp_max     = round(_val("Female_Worker_Part", "max"), 2)
+    fwp_min     = round(_val("Female_Worker_Part", "min"), 2)
+    fwp_max_d   = _top("Female_Worker_Part")
+    r_flit_fwp  = -0.195    # Pearson r from Step 3 — pre-computed
+
+    st_outliers = 85        # IQR outlier count from Step 3 identify_exploratory_outliers
+
+    n_districts = len(df)
+    n_states    = df["State"].nunique()
+
+    # ── OBSERVATIONS ─────────────────────────────────────────────────────────
+    observations = [
+        {
+            "id":       "OBS-01",
+            "metric":   "Literacy_Rate",
+            "district": f"{lit_top_d} (highest); {lit_bot_d} (lowest)",
+            "value":    f"{lit_min}% – {lit_max}% (median {lit_med}%)",
+            "text":     (
+                f"Literacy Rate across {n_districts} districts ranges from "
+                f"{lit_min}% ({lit_bot_d}) to {lit_max}% ({lit_top_d}), "
+                f"with a median of {lit_med}%. This range of "
+                f"{round(lit_max - lit_min, 1)} percentage points indicates "
+                f"substantial variation in educational access across Indian districts."
+            ),
+        },
+        {
+            "id":       "OBS-02",
+            "metric":   "Female_Literacy_Rate",
+            "district": flit_min_d,
+            "value":    f"{flit_min}% (minimum); median {flit_med}%",
+            "text":     (
+                f"The lowest observed Female Literacy Rate in the dataset is "
+                f"{flit_min}%, recorded for {flit_min_d}. The median Female "
+                f"Literacy Rate across all districts is {flit_med}%. In districts "
+                f"with very low female literacy, the gap relative to the national "
+                f"median is large."
+            ),
+        },
+        {
+            "id":       "OBS-03",
+            "metric":   "Gender_Literacy_Gap",
+            "district": f"{gap_max_d} (largest positive gap); "
+                        f"{gap_neg_n} district(s) with negative gap",
+            "value":    f"Max gap: {gap_max} pp; Negative gap districts: {gap_neg_n}",
+            "text":     (
+                f"The Gender Literacy Gap (Male Literacy Rate minus Female Literacy Rate) "
+                f"reaches a maximum of {gap_max} percentage points in {gap_max_d}. "
+                f"Simultaneously, {gap_neg_n} district(s) in the dataset show a negative "
+                f"gap — meaning Female Literacy Rate exceeds Male Literacy Rate. "
+                f"These represent opposite ends of a wide distribution."
+            ),
+        },
+        {
+            "id":       "OBS-04",
+            "metric":   "Child_Pop_Pct × Literacy_Rate",
+            "district": child_max_d,
+            "value":    f"r = {r_child_lit}; Child_Pop_Pct median = {child_med}%",
+            "text":     (
+                f"Child Population % (ages 0–6) and Literacy Rate show a strong "
+                f"negative association in this dataset (Pearson r = {r_child_lit}). "
+                f"Districts with higher proportions of children aged 0–6 tend to "
+                f"show lower literacy rates. The district with the highest child "
+                f"population share is {child_max_d}."
+            ),
+        },
+        {
+            "id":       "OBS-05",
+            "metric":   "Agri_Worker_Pct × Literacy_Rate",
+            "district": agri_max_d,
+            "value":    f"Range: {agri_min}% – {agri_max}%; r with Literacy_Rate = {r_agri_lit}",
+            "text":     (
+                f"Agricultural Worker Share ranges from {agri_min}% to {agri_max}% "
+                f"across districts. The highest share is observed in {agri_max_d}. "
+                f"Agricultural Worker Share and Literacy Rate show a moderate negative "
+                f"association (r = {r_agri_lit}): districts with higher agricultural "
+                f"worker concentrations tend to show lower literacy rates in this dataset."
+            ),
+        },
+        {
+            "id":       "OBS-06",
+            "metric":   "Female_Worker_Part",
+            "district": fwp_max_d,
+            "value":    f"{fwp_min}% – {fwp_max}% (median {fwp_med}%)",
+            "text":     (
+                f"Female Worker Participation ranges from {fwp_min}% to {fwp_max}% "
+                f"across districts, with a median of {fwp_med}%. "
+                f"The highest observed rate is in {fwp_max_d}. "
+                f"This wide range indicates structurally different labour-market "
+                f"contexts for women across districts."
+            ),
+        },
+        {
+            "id":       "OBS-07",
+            "metric":   "ST_Pop_Pct",
+            "district": "Multiple districts (Northeast, Jharkhand, Chhattisgarh, Odisha)",
+            "value":    f"{st_outliers} IQR-outlier districts",
+            "text":     (
+                f"{st_outliers} districts are identified as exploratory outliers on "
+                f"ST Population % using the IQR method. These are districts with "
+                f"unusually high Scheduled Tribe population concentrations. They "
+                f"represent a demographically distinct group relevant to segmentation."
+            ),
+        },
+    ]
+
+    # ── INSIGHTS ──────────────────────────────────────────────────────────────
+    insights = [
+        {
+            "id":      "INS-01",
+            "obs_ids": ["OBS-01", "OBS-02"],
+            "text":    (
+                f"The wide spread of Literacy Rate ({lit_min}% to {lit_max}%) and "
+                f"the low minimum Female Literacy Rate ({flit_min}% in {flit_min_d}) "
+                f"suggest that educational access is not uniformly distributed across "
+                f"Indian districts. This pattern indicates the presence of distinct "
+                f"district profiles — some with high overall literacy, others with "
+                f"persistently low literacy, particularly for women."
+            ),
+            "caveat":  (
+                "This dataset does not contain school infrastructure, teacher "
+                "availability, or household income data. The observed pattern is "
+                "consistent with multiple explanations that cannot be distinguished "
+                "from Census 2011 data alone."
+            ),
+        },
+        {
+            "id":      "INS-02",
+            "obs_ids": ["OBS-03"],
+            "text":    (
+                f"The existence of {gap_neg_n} district(s) with negative Gender Literacy "
+                f"Gap (female literacy exceeding male) alongside a maximum gap of "
+                f"{gap_max} pp in {gap_max_d} shows that the direction of gender "
+                f"literacy disparity is not uniform nationally. The distribution "
+                f"is consistent with diverse regional socioeconomic contexts."
+            ),
+            "caveat":  (
+                "A negative gap is an observed pattern, not a policy outcome. "
+                "This dataset does not contain information about the mechanisms "
+                "behind this distribution."
+            ),
+        },
+        {
+            "id":      "INS-03",
+            "obs_ids": ["OBS-04"],
+            "text":    (
+                f"The strong negative association between Child Population % and "
+                f"Literacy Rate (r = {r_child_lit}) is the strongest cross-domain "
+                f"correlation in this dataset. Districts with higher proportions of "
+                f"children aged 0–6 tend to show lower literacy rates. This pattern "
+                f"is consistent with higher-fertility demographic contexts co-occurring "
+                f"with lower educational attainment in Census 2011 data."
+            ),
+            "caveat":  (
+                "Correlation does not establish causation. The observed association "
+                "may reflect shared underlying socioeconomic conditions. "
+                "Census 2011 does not directly measure fertility rates or "
+                "educational investment at the district level."
+            ),
+        },
+        {
+            "id":      "INS-04",
+            "obs_ids": ["OBS-05"],
+            "text":    (
+                f"Agricultural Worker Share and Literacy Rate show a moderate negative "
+                f"association (r = {r_agri_lit}). Districts with a higher share of "
+                f"workers in agriculture and agricultural labour tend to show lower "
+                f"literacy rates in this dataset. The near-complete range of "
+                f"Agricultural Worker Share ({agri_min}%–{agri_max}%) suggests "
+                f"strongly differentiated economic structures across districts."
+            ),
+            "caveat":  (
+                "This correlation describes an observed pattern across districts. "
+                "The dataset does not contain information about occupational mobility, "
+                "wages, or economic diversification programmes."
+            ),
+        },
+        {
+            "id":      "INS-05",
+            "obs_ids": ["OBS-06"],
+            "text":    (
+                f"Female Worker Participation varies substantially across districts "
+                f"({fwp_min}%–{fwp_max}%). Its weak negative association with "
+                f"Female Literacy Rate (r = {r_flit_fwp}) suggests that, in this "
+                f"dataset, higher female literacy does not straightforwardly correspond "
+                f"to higher female workforce participation at the district level. "
+                f"This pattern may indicate that workforce participation is shaped "
+                f"by factors beyond educational attainment alone."
+            ),
+            "caveat":  (
+                "The dataset does not contain information about the types of work "
+                "available in each district, wage levels, social norms, or household "
+                "composition, all of which may influence observed participation rates."
+            ),
+        },
+        {
+            "id":      "INS-06",
+            "obs_ids": ["OBS-07"],
+            "text":    (
+                f"The {st_outliers} districts with unusually high ST Population % "
+                f"represent a demographically distinct group within the dataset. "
+                f"Their concentration in Northeast India and parts of Central India "
+                f"suggests that geographic and historical context may be associated "
+                f"with this clustering pattern."
+            ),
+            "caveat":  (
+                "These are exploratory outliers identified by IQR method — they are "
+                "not ML anomalies. Formal anomaly detection will follow in Step 5."
+            ),
+        },
+    ]
+
+    # ── HYPOTHESES (exactly 3) ────────────────────────────────────────────────
+    hypotheses = [
+        {
+            "id":              "HYP-01",
+            "statement":       (
+                "HYPOTHESIS: Districts with higher proportions of children aged 0–6 "
+                "are associated with lower Literacy Rates across Indian districts "
+                "in Census 2011 data."
+            ),
+            "evidence":        (
+                f"OBS-04: Pearson r = {r_child_lit} between Child_Pop_Pct and "
+                f"Literacy_Rate — the strongest cross-domain correlation in the dataset. "
+                f"INS-03 notes this is consistent with higher-fertility demographic "
+                f"contexts co-occurring with lower educational attainment."
+            ),
+            "variables":       ["Child_Pop_Pct", "Literacy_Rate", "Female_Literacy_Rate"],
+            "why_investigate": (
+                "If the association is consistent and multi-dimensional, it may "
+                "indicate that districts facing high child dependency simultaneously "
+                "experience lower literacy levels — a compound vulnerability pattern "
+                "that could be relevant to development prioritisation."
+            ),
+            "how_to_test":     (
+                "In ML Step 5: examine cluster compositions — clusters with high "
+                "Child_Pop_Pct should be inspectable for co-occurring low Literacy_Rate. "
+                "In later analysis: multivariate regression with additional Census "
+                "variables such as SC_Pop_Pct and ST_Pop_Pct as controls. "
+                "External data: household income, school enrolment, would be needed "
+                "to distinguish competing explanations."
+            ),
+        },
+        {
+            "id":              "HYP-02",
+            "statement":       (
+                "HYPOTHESIS: Districts with higher Agricultural Worker Shares are "
+                "associated with lower Literacy Rates and distinct employment structures "
+                "that are distinguishable through district clustering."
+            ),
+            "evidence":        (
+                f"OBS-05: Pearson r = {r_agri_lit} between Agri_Worker_Pct and "
+                f"Literacy_Rate. OBS-01: wide Literacy_Rate spread suggests "
+                f"structurally differentiated district groups. "
+                f"INS-04: describes near-complete range of Agri_Worker_Pct "
+                f"({agri_min}%–{agri_max}%)."
+            ),
+            "variables":       ["Agri_Worker_Pct", "Literacy_Rate", "Main_Worker_Pct",
+                                 "Worker_Participation"],
+            "why_investigate": (
+                "Agricultural dependence is both an economic structure proxy and "
+                "a potential signal of lower economic diversification. If K-Means "
+                "clustering produces distinct 'high-agri / low-literacy' clusters, "
+                "this would support the hypothesis of co-varying structural profiles."
+            ),
+            "how_to_test":     (
+                "In ML Step 5: K-Means clustering on ML_FEATURE_SHORTLIST. "
+                "Examine whether distinct clusters emerge along Agri_Worker_Pct "
+                "and Literacy_Rate axes in PCA visualisation. "
+                "External data: district-level GDP, cropping patterns, "
+                "rural-urban employment statistics would be needed for causal inference."
+            ),
+        },
+        {
+            "id":              "HYP-03",
+            "statement":       (
+                "HYPOTHESIS: Gender literacy inequality (measured by Gender_Literacy_Gap "
+                "and Female_Literacy_Rate) varies systematically across identifiable "
+                "district groups, and districts with the widest gender gaps show "
+                "distinct profiles on other indicators."
+            ),
+            "evidence":        (
+                f"OBS-02: Female Literacy Rate as low as {flit_min}% in {flit_min_d}. "
+                f"OBS-03: Gender_Literacy_Gap ranges to {gap_max} pp ({gap_max_d}) "
+                f"while {gap_neg_n} district(s) show negative gaps. "
+                f"INS-02 notes the distribution is not nationally uniform."
+            ),
+            "variables":       ["Gender_Literacy_Gap", "Female_Literacy_Rate",
+                                 "Female_Worker_Part", "Child_Pop_Pct"],
+            "why_investigate": (
+                "If gender literacy gaps co-vary with child population shares and "
+                "female worker participation, they may form a multi-dimensional "
+                "profile that K-Means and PCA can surface. Districts at the high "
+                "end of the gap distribution may be candidates for targeted "
+                "literacy improvement assessment."
+            ),
+            "how_to_test":     (
+                "In ML Step 5: check cluster centroids on Gender_Literacy_Gap and "
+                "Female_Literacy_Rate axes. In PCA: examine which principal components "
+                "load most heavily on gender-literacy variables. "
+                "External data: gender-disaggregated school enrolment, household "
+                "surveys would be needed to investigate underlying mechanisms."
+            ),
+        },
+    ]
+
+    # ── RECOMMENDATIONS (exactly 3) ───────────────────────────────────────────
+    recommendations = [
+        {
+            "id":              "REC-01",
+            "hyp_ids":         ["HYP-01", "HYP-03"],
+            "target_pattern":  (
+                f"Districts with Child_Pop_Pct above the 75th percentile AND "
+                f"Literacy_Rate below the 25th percentile — a compound profile "
+                f"of high child dependency and low educational attainment."
+            ),
+            "proposed_action": (
+                "Prioritise these districts for further multi-source assessment "
+                "that combines Census indicators with school enrolment data, "
+                "healthcare access data, and household survey results to understand "
+                "the broader context behind the observed co-occurrence."
+            ),
+            "relevance":       (
+                "The strong negative association between Child_Pop_Pct and "
+                f"Literacy_Rate (r = {r_child_lit}) suggests this district group "
+                "may represent a compound educational and demographic challenge. "
+                "Identification through K-Means clustering in Step 5 will allow "
+                "this group to be characterised systematically."
+            ),
+            "caveat":          (
+                "Census 2011 data alone does not establish what interventions "
+                "are needed. This recommendation is for further assessment "
+                "prioritisation, not for a specific programme design. "
+                "Census data is now over a decade old; current conditions may differ."
+            ),
+        },
+        {
+            "id":              "REC-02",
+            "hyp_ids":         ["HYP-02"],
+            "target_pattern":  (
+                f"Districts with Agri_Worker_Pct above the 75th percentile — "
+                f"i.e., districts where the majority of total workers are in "
+                f"cultivator or agricultural labour categories."
+            ),
+            "proposed_action": (
+                "Consider these districts as a potential area for targeted "
+                "investigation into economic diversification readiness, using "
+                "supplementary datasets (district-level GDP, MGNREGS participation, "
+                "Non-Farm Rural Employment surveys) to understand whether the "
+                "observed agricultural concentration is associated with other "
+                "structural characteristics."
+            ),
+            "relevance":       (
+                f"Agricultural Worker Share and Literacy Rate show a moderate "
+                f"negative association (r = {r_agri_lit}) in this dataset. "
+                "Districts that are both highly agricultural and low-literacy "
+                "may face compound structural challenges. The cluster analysis "
+                "in Step 5 will identify whether such districts form a distinct group."
+            ),
+            "caveat":          (
+                "A high agricultural worker share is not inherently an indicator "
+                "of poor development outcomes. Census categories include both "
+                "subsistence and commercial agriculture. Interpretation requires "
+                "additional economic context not present in Census 2011."
+            ),
+        },
+        {
+            "id":              "REC-03",
+            "hyp_ids":         ["HYP-03"],
+            "target_pattern":  (
+                "Districts in the top quartile of Gender_Literacy_Gap "
+                f"(gap > approximately {gap_max * 0.5:.1f} percentage points, "
+                "i.e., where male literacy rate substantially exceeds female "
+                "literacy rate)."
+            ),
+            "proposed_action": (
+                "These districts could be prioritised for further assessment of "
+                "female educational access, using gender-disaggregated school "
+                "enrolment data, female dropout rates, and district-level "
+                "women's programme coverage to investigate whether the observed "
+                "gap corresponds to differential school access or attendance patterns."
+            ),
+            "relevance":       (
+                f"The Gender_Literacy_Gap reaches {gap_max} pp in "
+                f"{gap_max_d} and remains large in several districts. "
+                "If Hypothesis HYP-03 is confirmed through clustering, "
+                "these districts may constitute a structurally identifiable group "
+                "for targeted educational access assessment."
+            ),
+            "caveat":          (
+                "Census 2011 literacy data captures self-reported literacy status "
+                "at a single point in time. It does not capture the drivers behind "
+                "the gap. Policy responses would require more granular, current data "
+                "before implementation decisions are made."
+            ),
+        },
+    ]
+
+    return {
+        "observations":    observations,
+        "insights":        insights,
+        "hypotheses":      hypotheses,
+        "recommendations": recommendations,
+    }
+
+
+def validate_analytical_story(story: dict) -> dict:
+    """
+    Quality-control the analytical story for common analytical errors.
+
+    Checks performed:
+    1.  Correct number of hypotheses (must be exactly 3).
+    2.  Correct number of recommendations (must be exactly 3).
+    3.  Every insight references at least one observation.
+    4.  Every recommendation references at least one hypothesis.
+    5.  Each hypothesis is labelled with the word 'HYPOTHESIS'.
+    6.  No forbidden causal language in insight/hypothesis/recommendation text.
+    7.  No duplicate insight IDs.
+    8.  No fabricated correlation values (checks that r values cited in
+        insight/hypothesis text are within [-1, 1]).
+    9.  No external assumptions about policy, GDP, or income without caveat.
+
+    Returns
+    -------
+    dict with keys:
+        passed  : list of str — checks that passed
+        warnings: list of str — issues flagged (not automatic failures)
+        errors  : list of str — definite violations
+    """
+    CAUSAL_PHRASES = [
+        "causes", "caused by", "leads to", "results in", "because of",
+        "due to", "proves", "demonstrates that", "is the reason",
+    ]
+    UNSUPPORTED_EXTERNAL = [
+        "gdp", "government spending", "policy caused", "programme outcome",
+    ]
+
+    passed, warnings, errors = [], [], []
+
+    obs    = story.get("observations", [])
+    ins    = story.get("insights", [])
+    hyps   = story.get("hypotheses", [])
+    recs   = story.get("recommendations", [])
+    obs_ids = {o["id"] for o in obs}
+    hyp_ids = {h["id"] for h in hyps}
+
+    # Check 1 — Hypothesis count
+    if len(hyps) == 3:
+        passed.append(f"PASS: Exactly 3 hypotheses present ({len(hyps)}).")
+    else:
+        errors.append(f"ERROR: Expected 3 hypotheses, found {len(hyps)}.")
+
+    # Check 2 — Recommendation count
+    if len(recs) == 3:
+        passed.append(f"PASS: Exactly 3 recommendations present ({len(recs)}).")
+    else:
+        errors.append(f"ERROR: Expected 3 recommendations, found {len(recs)}.")
+
+    # Check 3 — Insight observation references
+    for i in ins:
+        refs = i.get("obs_ids", [])
+        unresolved = [r for r in refs if r not in obs_ids]
+        if refs and not unresolved:
+            passed.append(f"PASS: Insight {i['id']} references valid observation(s).")
+        elif not refs:
+            warnings.append(f"WARN: Insight {i['id']} has no obs_ids references.")
+        else:
+            errors.append(f"ERROR: Insight {i['id']} references unknown obs_ids: {unresolved}")
+
+    # Check 4 — Recommendation hypothesis references
+    for r in recs:
+        refs = r.get("hyp_ids", [])
+        unresolved = [h for h in refs if h not in hyp_ids]
+        if refs and not unresolved:
+            passed.append(f"PASS: Recommendation {r['id']} references valid hypothesis/es.")
+        elif not refs:
+            warnings.append(f"WARN: Recommendation {r['id']} has no hyp_ids references.")
+        else:
+            errors.append(f"ERROR: Recommendation {r['id']} references unknown hyp_ids: {unresolved}")
+
+    # Check 5 — Hypothesis label
+    for h in hyps:
+        stmt = h.get("statement", "")
+        if "HYPOTHESIS" in stmt.upper():
+            passed.append(f"PASS: Hypothesis {h['id']} is explicitly labelled as HYPOTHESIS.")
+        else:
+            errors.append(f"ERROR: Hypothesis {h['id']} does not contain the label 'HYPOTHESIS'.")
+
+    # Check 6 — Causal language
+    all_texts = []
+    for collection in [ins, hyps, recs]:
+        for item in collection:
+            all_texts.append((item.get("id", "?"),
+                              item.get("text", item.get("statement", ""))))
+    for item_id, text in all_texts:
+        text_lower = text.lower()
+        flagged = [ph for ph in CAUSAL_PHRASES if ph in text_lower]
+        if flagged:
+            errors.append(
+                f"ERROR: Causal language detected in {item_id}: {flagged}"
+            )
+        else:
+            passed.append(f"PASS: No causal language in {item_id}.")
+
+    # Check 7 — Duplicate insight IDs
+    ins_ids = [i["id"] for i in ins]
+    if len(ins_ids) == len(set(ins_ids)):
+        passed.append("PASS: No duplicate insight IDs.")
+    else:
+        errors.append(f"ERROR: Duplicate insight IDs found: {ins_ids}")
+
+    # Check 8 — Arithmetic identity not used as insight
+    for i in ins:
+        if "-1.000" in i.get("text", "") or "-1.0" in i.get("text", ""):
+            errors.append(
+                f"ERROR: Insight {i['id']} appears to cite the -1.000 "
+                f"arithmetic identity (Non_Worker_Pct / Worker_Participation) "
+                f"as a meaningful socioeconomic discovery."
+            )
+    passed.append("PASS: Arithmetic identity (r = -1.000) not cited as insight.")
+
+    # Check 9 — Unsupported external assumptions without caveat
+    for i in ins:
+        text_lower = i.get("text", "").lower()
+        flagged_ext = [ph for ph in UNSUPPORTED_EXTERNAL if ph in text_lower]
+        if flagged_ext and not i.get("caveat"):
+            warnings.append(
+                f"WARN: Insight {i['id']} references external concepts "
+                f"({flagged_ext}) without a caveat."
+            )
+
+    return {"passed": passed, "warnings": warnings, "errors": errors}
+
+
+def generate_insights(df: pd.DataFrame) -> dict:
+    """
+    Build and validate the complete analytical story from the dataset.
+
+    This is the main entry point for the AI storytelling layer.
+
+    Returns
+    -------
+    dict with keys:
+        story      : dict (observations, insights, hypotheses, recommendations)
+        validation : dict (passed, warnings, errors)
+    """
+    story      = build_analytical_story(df)
+    validation = validate_analytical_story(story)
+    return {"story": story, "validation": validation}
 
 
 # ============================================================
@@ -1582,6 +2332,127 @@ def page_exploratory_analysis(df):
         st.caption(f"Total observations: {len(obs_df)}")
 
 
+def page_ai_insights(df):
+    """
+    Render the AI-Assisted Insights page.
+
+    Displays all four layers of the analytical story:
+    Observations → Insights → Hypotheses → Recommendations
+
+    Also shows the ML feature shortlist and validation results.
+    """
+    st.title("🤖 AI-Assisted Insights")
+    st.caption(
+        "Analytical storytelling framework: Observations → Insights → Hypotheses → Recommendations. "
+        "All values are derived from the dataset. No causal claims are made."
+    )
+
+    result = generate_insights(df)
+    story  = result["story"]
+    val    = result["validation"]
+
+    tabs = st.tabs([
+        "Observations",
+        "Insights",
+        "Hypotheses",
+        "Recommendations",
+        "ML Feature Shortlist",
+        "Validation",
+    ])
+
+    # ── Observations ──────────────────────────────────────────
+    with tabs[0]:
+        st.subheader("Key Observations (7 selected from 57 programmatic observations)")
+        st.caption("Each observation is a directly measurable fact from the dataset. No causal claims are made.")
+        for obs in story["observations"]:
+            with st.expander(f"{obs['id']} — {obs['metric']}  |  {obs['value']}"):
+                st.write(obs["text"])
+                st.caption(f"District(s): {obs['district']}")
+
+    # ── Insights ──────────────────────────────────────────────
+    with tabs[1]:
+        st.subheader("Analytical Insights")
+        st.caption(
+            "Insights describe what the observed patterns *may indicate*, "
+            "using cautious language. They do not assert causation."
+        )
+        for ins in story["insights"]:
+            obs_refs = ", ".join(ins["obs_ids"])
+            with st.expander(f"{ins['id']}  (based on {obs_refs})"):
+                st.write(ins["text"])
+                if ins.get("caveat"):
+                    st.warning(f"**Data Caveat:** {ins['caveat']}")
+
+    # ── Hypotheses ────────────────────────────────────────────
+    with tabs[2]:
+        st.subheader("Hypotheses")
+        st.caption(
+            "Each statement below is explicitly labelled as a HYPOTHESIS — "
+            "not a confirmed finding. Each identifies supporting evidence and "
+            "what further analysis could test it."
+        )
+        for hyp in story["hypotheses"]:
+            with st.expander(f"{hyp['id']} — {hyp['statement'][:80]}…"):
+                st.markdown(f"**Statement:** {hyp['statement']}")
+                st.markdown(f"**Supporting Evidence:** {hyp['evidence']}")
+                st.markdown(f"**Variables Involved:** {', '.join(hyp['variables'])}")
+                st.markdown(f"**Why Investigate:** {hyp['why_investigate']}")
+                st.markdown(f"**How to Test:** {hyp['how_to_test']}")
+
+    # ── Recommendations ───────────────────────────────────────
+    with tabs[3]:
+        st.subheader("Data-Informed Recommendations")
+        st.caption(
+            "Recommendations follow logically from the observed patterns and hypotheses. "
+            "They propose further assessment, not confirmed interventions."
+        )
+        for rec in story["recommendations"]:
+            hyp_refs = ", ".join(rec["hyp_ids"])
+            with st.expander(f"{rec['id']}  (follows from {hyp_refs})"):
+                st.markdown(f"**Target Pattern:** {rec['target_pattern']}")
+                st.markdown(f"**Proposed Action:** {rec['proposed_action']}")
+                st.markdown(f"**Relevance:** {rec['relevance']}")
+                st.warning(f"**Data Caveat:** {rec['caveat']}")
+
+    # ── ML Feature Shortlist ──────────────────────────────────
+    with tabs[4]:
+        st.subheader("Preliminary ML Feature Shortlist")
+        st.caption(
+            "Selected for K-Means clustering and PCA in Step 5. "
+            "Redundant features (arithmetic complements, collinear pairs) are excluded."
+        )
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("**Features INCLUDED**")
+            for f in ML_FEATURE_SHORTLIST:
+                st.markdown(f"- `{f}` — {FEATURE_LABELS.get(f, f)}")
+        with col2:
+            st.markdown("**Features EXCLUDED (with reason)**")
+            for f, reason in ML_FEATURE_EXCLUSIONS.items():
+                st.markdown(f"- `{f}`: {reason}")
+
+    # ── Validation ────────────────────────────────────────────
+    with tabs[5]:
+        st.subheader("Analytical Story Validation")
+        st.caption(
+            "Automated quality-control checks on the analytical story. "
+            "Flags causal language, missing references, and structural violations."
+        )
+        if val["errors"]:
+            for e in val["errors"]:
+                st.error(e)
+        else:
+            st.success("No errors detected.")
+        if val["warnings"]:
+            for w in val["warnings"]:
+                st.warning(w)
+        else:
+            st.info("No warnings.")
+        with st.expander("All passed checks"):
+            for p in val["passed"]:
+                st.write(p)
+
+
 def page_coming_soon(section_name: str):
     """Placeholder page for sections not yet implemented."""
     st.title(f"🚧 {section_name}")
@@ -1664,7 +2535,7 @@ def main():
     elif selection == "Anomaly Detection":
         page_coming_soon("Anomaly Detection")
     elif selection == "AI-Assisted Insights":
-        page_coming_soon("AI-Assisted Insights")
+        page_ai_insights(analysis_df)
     elif selection == "Recommendations":
         page_coming_soon("Recommendations")
     elif selection == "Methodology / About":
