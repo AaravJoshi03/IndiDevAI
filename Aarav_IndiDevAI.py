@@ -3377,6 +3377,922 @@ reflect patterns within the 2011 Census data only.
                 st.write(p)
 
 
+# ============================================================
+# SECTION 24b — ML CLUSTER INTERPRETATION
+# ============================================================
+
+def interpret_clusters(ml_output: dict) -> list:
+    """
+    Produce a neutral, data-derived interpretation for each K-Means cluster.
+
+    For each cluster, calculates:
+    - District count and percentage
+    - Feature means
+    - Delta from overall dataset mean for each feature
+    - The top-3 distinguishing features (largest absolute delta)
+
+    Language rules:
+    - Cluster labels are neutral integers ("Cluster 0", etc.)
+    - No value-laden labels ("developed", "poor", "backward", etc.)
+    - Descriptions reference only observed model outputs.
+
+    Returns
+    -------
+    list of dicts, one per cluster, with keys:
+        cluster_id, cluster_label, n_districts, pct_districts,
+        feature_means, overall_means, deltas, top_features, description
+    """
+    km   = ml_output["km_result"]
+    prep = ml_output["ml_prep"]
+    results = ml_output["results_df"]
+    features = prep["features_used"]
+
+    overall_means = {f: results[f].mean() for f in features}
+
+    interpretations = []
+    for c_id in sorted(results["Cluster"].unique()):
+        subset = results[results["Cluster"] == c_id]
+        n      = len(subset)
+        pct    = round(100 * n / len(results), 1)
+
+        feat_means = {f: round(float(subset[f].mean()), 3) for f in features}
+        deltas     = {
+            f: round(feat_means[f] - overall_means[f], 3)
+            for f in features
+        }
+
+        # Top-3 distinguishing features by absolute delta
+        top_feats = sorted(features, key=lambda f: abs(deltas[f]), reverse=True)[:3]
+
+        # Build neutral description from deltas
+        desc_parts = []
+        for f in top_feats:
+            d = deltas[f]
+            direction = "higher" if d > 0 else "lower"
+            desc_parts.append(
+                f"{FEATURE_LABELS.get(f, f).split(' (')[0]} is {direction} "
+                f"than the dataset average ({feat_means[f]:.2f} vs "
+                f"{overall_means[f]:.2f})"
+            )
+        description = (
+            f"Cluster {c_id} ({n} districts, {pct}%): "
+            + "; ".join(desc_parts) + "."
+        )
+
+        interpretations.append({
+            "cluster_id":     c_id,
+            "cluster_label":  f"Cluster {c_id}",
+            "n_districts":    n,
+            "pct_districts":  pct,
+            "feature_means":  feat_means,
+            "overall_means":  {f: round(float(overall_means[f]), 3) for f in features},
+            "deltas":         deltas,
+            "top_features":   top_feats,
+            "description":    description,
+        })
+
+    return interpretations
+
+
+# ============================================================
+# SECTION 24c — ML INTERPRETATION PAGE
+# ============================================================
+
+def page_ml_interpretation(analysis_df: pd.DataFrame):
+    """
+    Streamlit page: K-Means Cluster Interpretation, PCA summary, Anomaly summary,
+    and District Explorer.  Renders after ML pipeline is cached.
+    """
+    st.title("🔍 ML Interpretation & District Explorer")
+    st.caption(
+        "Data-derived interpretations of the K-Means clusters, PCA structure, "
+        "and Isolation Forest results from Census of India 2011 district data."
+    )
+    st.info(
+        "ℹ️ All descriptions below are based solely on observed model outputs "
+        "from the 2011 Census snapshot. Cluster labels are neutral data-derived "
+        "groupings — they do **not** represent official categories or rankings. "
+        "Patterns are correlational, not causal."
+    )
+
+    @st.cache_data(show_spinner="Loading ML results…")
+    def cached_ml(df):
+        return run_ml_pipeline(df)
+
+    try:
+        ml_output = cached_ml(analysis_df)
+    except Exception as exc:
+        st.error(f"ML pipeline error: {exc}")
+        return
+
+    interpretations = interpret_clusters(ml_output)
+    km      = ml_output["km_result"]
+    pca_res = ml_output["pca_result"]
+    iso_res = ml_output["iso_result"]
+    results = ml_output["results_df"]
+    features = ml_output["ml_prep"]["features_used"]
+
+    tabs = st.tabs([
+        "Cluster Interpretation",
+        "PCA Summary",
+        "Anomaly Summary",
+        "District Explorer",
+    ])
+
+    # ── Tab 1: Cluster Interpretation ────────────────────────────────────────
+    with tabs[0]:
+        st.subheader("K-Means Cluster Interpretation")
+        st.caption(
+            "For each cluster, the table shows how its average indicator values "
+            "compare to the overall district dataset mean. Positive delta = "
+            "above average; negative delta = below average (in original units)."
+        )
+
+        # Overall cluster-size table
+        st.markdown("**Cluster Composition**")
+        st.dataframe(km["cluster_summary"], use_container_width=True, hide_index=True)
+
+        st.markdown("---")
+        st.markdown("**Top Distinguishing Features per Cluster**")
+        st.caption(
+            "The three indicators with the largest absolute deviation from the "
+            "dataset mean define each cluster's most distinctive characteristics."
+        )
+
+        rows = []
+        for interp in interpretations:
+            for rank, f in enumerate(interp["top_features"], 1):
+                rows.append({
+                    "Cluster":   interp["cluster_label"],
+                    "Rank":      rank,
+                    "Feature":   FEATURE_LABELS.get(f, f).split(" (")[0],
+                    "Cluster Avg": interp["feature_means"][f],
+                    "Dataset Avg": interp["overall_means"][f],
+                    "Delta":       interp["deltas"][f],
+                })
+        distinc_df = pd.DataFrame(rows)
+        st.dataframe(distinc_df, use_container_width=True, hide_index=True)
+
+        st.markdown("---")
+        st.markdown("**Neutral Cluster Descriptions**")
+        for interp in interpretations:
+            with st.expander(f"Cluster {interp['cluster_id']} — "
+                             f"{interp['n_districts']} districts "
+                             f"({interp['pct_districts']}%)"):
+                st.write(interp["description"])
+                # Full feature comparison table
+                feat_rows = []
+                for f in features:
+                    feat_rows.append({
+                        "Feature": FEATURE_LABELS.get(f, f).split(" (")[0],
+                        "Cluster Avg": interp["feature_means"][f],
+                        "Dataset Avg": interp["overall_means"][f],
+                        "Delta":       interp["deltas"][f],
+                    })
+                feat_df = pd.DataFrame(feat_rows)
+                st.dataframe(feat_df, use_container_width=True, hide_index=True)
+
+        st.markdown("---")
+        st.subheader("Cluster Profile Heatmap")
+        st.caption(
+            "Deviation from dataset mean for each feature, per cluster. "
+            "Blue = above average · Red = below average. "
+            "Values are in original (unscaled) units."
+        )
+        # Build heatmap from interpret_clusters output
+        feat_short = [FEATURE_LABELS.get(f, f).split(" (")[0][:18] for f in features]
+        cluster_lbls = [f"Cluster {i['cluster_id']}" for i in interpretations]
+        z_vals = np.array([[i["deltas"][f] for f in features] for i in interpretations])
+        fig_heat = go.Figure(data=go.Heatmap(
+            z=z_vals, x=feat_short, y=cluster_lbls,
+            colorscale="RdBu", zmid=0,
+            colorbar=dict(title="Delta from<br>dataset mean"),
+            text=np.round(z_vals, 2),
+            texttemplate="%{text}",
+            textfont={"size": 9},
+        ))
+        fig_heat.update_layout(
+            title="Cluster Profiles — Deviation from Dataset Mean (original units)",
+            xaxis=dict(tickangle=-40),
+            height=300 + 60 * len(interpretations),
+        )
+        st.plotly_chart(fig_heat, use_container_width=True)
+
+        st.markdown("---")
+        st.subheader("What K-Means Does in This Project")
+        st.markdown(
+            """
+K-Means partitions the 640 districts into **K groups** such that districts
+within each group are more similar to each other than to districts in other
+groups, based on the 11 selected socioeconomic indicators.
+
+**Selection of K:**
+K was chosen by evaluating silhouette scores for K = 2 through K = 8. The
+value with the highest silhouette score was selected (K = 4, score = 0.2232).
+The silhouette score measures how well each district fits its assigned cluster
+versus the nearest alternative — higher values indicate better-defined
+separation.
+
+**Important limitations:**
+- Clusters are mathematical groupings, not official categories.
+- The silhouette score of 0.2232 indicates moderate cluster separation —
+  districts do not form sharply distinct groups; there is overlap.
+- Clustering reflects the 11 selected features from 2011 data only.
+- Different feature sets or K values would produce different groupings.
+"""
+        )
+
+    # ── Tab 2: PCA Summary ────────────────────────────────────────────────────
+    with tabs[1]:
+        st.subheader("PCA — Dimension Reduction Summary")
+        ev = pca_res["explained_var"]
+        st.markdown(
+            f"""
+Principal Component Analysis reduced the 11-feature indicator space to 2
+dimensions for visualisation.
+
+| Component | Explained Variance |
+|-----------|-------------------|
+| **PC1** | **{ev[0]*100:.1f}%** |
+| **PC2** | **{ev[1]*100:.1f}%** |
+| **PC1 + PC2 (combined)** | **{(ev[0]+ev[1])*100:.1f}%** |
+
+A combined variance of {(ev[0]+ev[1])*100:.1f}% means that the 2D projection
+retains a substantial but partial representation of the 11-dimensional data.
+The remaining {(1-(ev[0]+ev[1]))*100:.1f}% of variation is not visible in the
+2D scatter plot.
+"""
+        )
+
+        st.subheader("Component Loadings")
+        st.caption(
+            "Loadings show each feature's mathematical contribution to PC1 and PC2. "
+            "Larger absolute values = stronger contribution. "
+            "Signs indicate direction only — they do not have inherent meaning."
+        )
+        loadings = pca_res["loadings_df"].copy().reset_index()
+        loadings.columns = ["Feature", "PC1 Loading", "PC2 Loading"]
+        loadings["Feature Label"] = loadings["Feature"].map(
+            lambda f: FEATURE_LABELS.get(f, f).split(" (")[0]
+        )
+        loadings = loadings[["Feature", "Feature Label", "PC1 Loading", "PC2 Loading"]]
+        loadings = loadings.sort_values("PC1 Loading", key=abs, ascending=False)
+        st.dataframe(loadings, use_container_width=True, hide_index=True)
+
+        st.subheader("What PCA Contributes")
+        st.markdown(
+            """
+PCA serves two roles in this project:
+
+1. **Visualisation:** The 2D PCA scatter plot (in the Machine Learning section)
+   shows how districts relate to one another in reduced-dimension space, coloured
+   by K-Means cluster assignment. This helps assess whether clusters are
+   geometrically separated.
+
+2. **Indicator structure:** The component loadings reveal which indicators vary
+   together in the dataset. For example, features that load strongly in the same
+   direction on PC1 tend to be positively correlated across districts.
+
+**Important:** PCA is a mathematical transformation — it does not assign meaning
+to the components. Component directions are not labelled as "development axis"
+or similar. The loadings describe linear combinations of the 11 indicators in
+this 2011 dataset only.
+"""
+        )
+
+    # ── Tab 3: Anomaly Summary ────────────────────────────────────────────────
+    with tabs[2]:
+        st.subheader("Isolation Forest — Anomaly Summary")
+        n_anom = iso_res["n_anomalies"]
+        n_dist = len(results)
+        st.markdown(
+            f"""
+Isolation Forest identified **{n_anom} districts** ({n_anom/n_dist*100:.1f}%)
+with statistically unusual combinations of the 11 selected indicators, relative
+to the rest of the district dataset.
+
+**How Isolation Forest works:**
+The algorithm isolates data points by randomly selecting a feature and a random
+split value. Points that can be isolated with fewer splits (shorter average
+path length) are considered more unusual. The `contamination` parameter (set to
+{CONTAMINATION:.0%}) controls the expected proportion of unusual profiles.
+
+**What "unusual" means here:**
+A flagged district has an atypical *combination* of the 11 indicators —
+not that any single indicator is extreme. For example, a district with an
+unusual combination of high ST_Pop_Pct and high Literacy_Rate would appear
+unusual relative to the general pattern where these features are negatively
+associated.
+
+**What it does NOT mean:**
+- "Unusual" is not equivalent to "problematic" or "underdeveloped".
+- Flagged districts may be unusual because they are exceptionally high on
+  positive indicators, not low.
+- The anomaly score is data-driven and pattern-based only.
+"""
+        )
+        st.subheader("Districts with Unusual Profiles")
+        anomalies = results[results["Anomaly_Flag"] == -1].copy()
+        anomalies = anomalies.sort_values("Anomaly_Score")
+        display_cols = (
+            ["Name", "State", "Cluster_Label", "Anomaly_Score"]
+            + features[:6]
+        )
+        st.dataframe(
+            anomalies[display_cols].rename(columns={"Cluster_Label": "Cluster"}),
+            use_container_width=True, hide_index=True,
+        )
+        st.caption(
+            f"{n_anom} districts shown. Sorted by anomaly score (lowest = most atypical "
+            "indicator combination). All values from Census of India 2011."
+        )
+
+    # ── Tab 4: District Explorer ──────────────────────────────────────────────
+    with tabs[3]:
+        st.subheader("District Explorer")
+        st.caption(
+            "Select a district to view its socioeconomic indicator profile, "
+            "cluster assignment, and anomaly flag. "
+            "All values are from **Census of India 2011** and reflect "
+            "conditions at that point in time only."
+        )
+
+        EXPLORER_FEATURES = [
+            "Literacy_Rate", "Female_Literacy_Rate", "Gender_Literacy_Gap",
+            "Worker_Participation", "Female_Worker_Part", "Agri_Worker_Pct",
+            "Child_Pop_Pct", "Sex_Ratio",
+        ]
+
+        col_s, col_d = st.columns(2)
+        with col_s:
+            states = sorted(results["State"].unique().tolist())
+            sel_state_ex = st.selectbox("Select State / UT", states, key="explorer_state")
+        with col_d:
+            districts_in_state = sorted(
+                results[results["State"] == sel_state_ex]["Name"].unique().tolist()
+            )
+            sel_dist_ex = st.selectbox("Select District", districts_in_state,
+                                       key="explorer_district")
+
+        row = results[
+            (results["State"] == sel_state_ex) & (results["Name"] == sel_dist_ex)
+        ]
+        if row.empty:
+            st.warning("District not found in ML results.")
+        else:
+            row = row.iloc[0]
+
+            mc1, mc2, mc3 = st.columns(3)
+            mc1.metric("Cluster",       row["Cluster_Label"])
+            mc2.metric("Anomaly Flag",  "Unusual (−1)" if row["Anomaly_Flag"] == -1
+                                         else "Typical (+1)")
+            mc3.metric("Anomaly Score", f"{row['Anomaly_Score']:.4f}")
+
+            st.markdown("---")
+            st.markdown("**Socioeconomic Indicators — Census of India 2011**")
+
+            indicator_rows = []
+            for f in EXPLORER_FEATURES:
+                if f in row.index:
+                    overall_mean = float(results[f].mean())
+                    val = float(row[f])
+                    delta = val - overall_mean
+                    indicator_rows.append({
+                        "Indicator": FEATURE_LABELS.get(f, f).split(" (")[0],
+                        "District Value": round(val, 2),
+                        "Dataset Mean": round(overall_mean, 2),
+                        "Delta": round(delta, 2),
+                    })
+            ind_df = pd.DataFrame(indicator_rows)
+            st.dataframe(ind_df, use_container_width=True, hide_index=True)
+
+            # Radar chart
+            categories = [r["Indicator"] for r in indicator_rows]
+            vals_raw   = [r["District Value"] for r in indicator_rows]
+            means_raw  = [r["Dataset Mean"] for r in indicator_rows]
+
+            # Normalise 0–1 within dataset range for radar display
+            norm_vals, norm_means = [], []
+            for f in EXPLORER_FEATURES:
+                if f in results.columns:
+                    mn, mx = results[f].min(), results[f].max()
+                    rng = mx - mn if mx != mn else 1.0
+                    norm_vals.append(round((float(row[f]) - mn) / rng, 3))
+                    norm_means.append(round((results[f].mean() - mn) / rng, 3))
+
+            fig_radar = go.Figure()
+            fig_radar.add_trace(go.Scatterpolar(
+                r=norm_vals + [norm_vals[0]],
+                theta=categories + [categories[0]],
+                fill="toself",
+                name=sel_dist_ex,
+                line_color=CHART_COLORS[0],
+            ))
+            fig_radar.add_trace(go.Scatterpolar(
+                r=norm_means + [norm_means[0]],
+                theta=categories + [categories[0]],
+                fill="toself",
+                name="Dataset Mean",
+                line_color="grey",
+                opacity=0.4,
+            ))
+            fig_radar.update_layout(
+                polar=dict(radialaxis=dict(visible=True, range=[0, 1])),
+                title=f"Indicator Profile — {sel_dist_ex}, {sel_state_ex}",
+                legend=dict(orientation="h"),
+                height=450,
+            )
+            st.plotly_chart(fig_radar, use_container_width=True)
+            st.caption(
+                "Radar values are normalised to [0, 1] within the dataset range "
+                "for visual comparison only. Table values above show the original "
+                "indicator magnitudes from Census of India 2011."
+            )
+
+
+# ============================================================
+# SECTION 24d — RECOMMENDATIONS PAGE
+# ============================================================
+
+def page_recommendations(analysis_df: pd.DataFrame):
+    """
+    Streamlit page: data-driven recommendations derived from the Step 4
+    analytical storytelling (REC-01, REC-02, REC-03).
+
+    Displays the three existing recommendations with their supporting evidence,
+    caveats, and explicit data limitations. No new recommendations are invented.
+    """
+    st.title("📋 Recommendations")
+    st.caption(
+        "Three data-informed recommendations derived from the exploratory "
+        "analysis of Census of India 2011 district-level data."
+    )
+    st.warning(
+        "**Important disclaimer:** These recommendations are based on "
+        "exploratory analysis of historical 2011 Census data. They suggest "
+        "areas for *further assessment*, not proven interventions. "
+        "Census 2011 is now over a decade old — current conditions may differ "
+        "substantially. No causal claims are made."
+    )
+
+    # Load analytical story to get recommendations at runtime
+    @st.cache_data(show_spinner="Loading analytical story…")
+    def cached_story(df):
+        return build_analytical_story(df)
+
+    try:
+        story = cached_story(analysis_df)
+    except Exception as exc:
+        st.error(f"Could not generate recommendations: {exc}")
+        return
+
+    recs  = story["recommendations"]
+    hyps  = {h["id"]: h for h in story["hypotheses"]}
+
+    st.markdown("---")
+
+    ICON = ["1️⃣", "2️⃣", "3️⃣"]
+    for idx, rec in enumerate(recs):
+        st.subheader(f"{ICON[idx]} {rec['id']} — Target Pattern")
+        st.markdown(f"> {rec['target_pattern']}")
+
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("**Proposed Action**")
+            st.markdown(rec["proposed_action"])
+        with c2:
+            st.markdown("**Relevance (from EDA / Storytelling)**")
+            st.markdown(rec["relevance"])
+
+        with st.expander(f"Caveat & Data Limitations — {rec['id']}"):
+            st.markdown(rec["caveat"])
+            st.markdown(
+                "**General data limitation:** All indicators are derived from "
+                "Census of India 2011. This dataset captures a single historical "
+                "snapshot. Administrative boundaries, population distributions, "
+                "and socioeconomic conditions may have changed since 2011. "
+                "Census data alone is not sufficient for programme design."
+            )
+            for hyp_id in rec.get("hyp_ids", []):
+                if hyp_id in hyps:
+                    h = hyps[hyp_id]
+                    st.markdown(f"**Supporting {hyp_id}:** {h['statement']}")
+
+        st.markdown("---")
+
+    # Summary table
+    st.subheader("Recommendations Summary")
+    sum_rows = []
+    for rec in recs:
+        sum_rows.append({
+            "ID":             rec["id"],
+            "Target Pattern": rec["target_pattern"][:100] + "…",
+            "Proposed Action": rec["proposed_action"][:100] + "…",
+        })
+    st.dataframe(pd.DataFrame(sum_rows), use_container_width=True, hide_index=True)
+
+    st.markdown("---")
+    st.subheader("Framework Note")
+    st.markdown(
+        """
+These recommendations follow the IBM SkillsBuild Data Analytics framework:
+
+**Observations → Insights → Hypotheses → Recommendations**
+
+Each recommendation is linked to one or more explicitly-labelled hypotheses.
+Hypotheses are clearly marked as such and are not presented as proven facts.
+The recommendations suggest areas for *prioritisation of further assessment*
+using additional datasets and current data — not specific programme designs
+based on Census 2011 alone.
+"""
+    )
+
+
+# ============================================================
+# SECTION 24e — METHODOLOGY / ABOUT PAGE
+# ============================================================
+
+def page_methodology():
+    """
+    Streamlit page: project methodology, pipeline, limitations, and reproducibility.
+    Describes the actual implemented project — no technologies or outcomes are invented.
+    """
+    st.title("📖 Methodology / About")
+    st.caption(
+        "A full description of the IndiDevAI project pipeline, analytical approach, "
+        "machine learning methods, limitations, and reproducibility."
+    )
+
+    tabs = st.tabs([
+        "Project Overview",
+        "Data & Preparation",
+        "Feature Engineering",
+        "EDA & Storytelling",
+        "Machine Learning",
+        "Limitations",
+        "Reproducibility",
+    ])
+
+    # ── Tab 1: Project Overview ───────────────────────────────────────────────
+    with tabs[0]:
+        st.subheader("IndiDevAI — AI-Powered District Development Intelligence")
+        st.markdown(
+            """
+**Project:** IndiDevAI
+**Internship:** IBM SkillsBuild Academic Internship 2026 — Data Analytics with AI
+**Dataset:** Census of India 2011 — Primary Census Abstract (PCA),
+State and District Level
+**Source:** Office of the Registrar General & Census Commissioner, India
+**Official source:** https://censusindia.gov.in/nada/index.php/catalog/6191
+
+---
+
+### Objective
+
+IndiDevAI analyses district-level socioeconomic characteristics of 640 Indian
+districts using Census of India 2011 data. The project applies data cleaning,
+feature engineering, exploratory analysis, analytical storytelling, and
+unsupervised machine learning to identify patterns, groupings, and statistically
+unusual profiles across demographic, education, and employment dimensions.
+
+### Scope
+
+- **Geographic level:** District (Level == "DISTRICT", TRU == "Total")
+- **Districts analysed:** 640
+- **States / UTs:** 35
+- **Year of data:** 2011 (historical snapshot)
+
+### Deliverables
+
+| Component | Description |
+|-----------|-------------|
+| `Aarav_IndiDevAI.py` | Single Python file containing the complete project and Streamlit application |
+| `requirements.txt` | Python package dependencies |
+| `data/processed/district_analysis_ready.csv` | Cleaned and feature-engineered district dataset (640 × 75) |
+| `data/processed/district_ml_results.csv` | ML outputs: cluster labels, PCA coordinates, anomaly scores (640 × 20) |
+"""
+        )
+
+    # ── Tab 2: Data & Preparation ─────────────────────────────────────────────
+    with tabs[1]:
+        st.subheader("Dataset")
+        st.markdown(
+            """
+| Attribute | Value |
+|-----------|-------|
+| File | `DDW_PCA0000_2011_Indiastatedist.xlsx` |
+| Sheet | Sheet1 |
+| Raw rows | 2,028 (excluding header) |
+| Raw columns | 94 |
+| Scope filter | Level == "DISTRICT" AND TRU == "Total" |
+| District rows after filter | 640 |
+| States / UTs | 35 |
+| Missing values | 0 (after zero-population rows removed) |
+| Duplicate district records | 0 |
+
+### Data Loading
+
+- File loaded with `pandas.read_excel()` using `dtype=str` to preserve zero-padded
+  state and district codes.
+- Column names are whitespace-stripped on load.
+- Structural columns (`State`, `District`, `Level`, `Name`, `TRU`, `TOT_P`,
+  `TOT_M`, `TOT_F`) are checked for presence before proceeding.
+
+### Validation (8-point check)
+
+1. Dataset dimensions verified (rows, columns)
+2. Unique `Level` values confirmed (India / STATE / DISTRICT)
+3. Unique `TRU` values confirmed (Total / Rural / Urban)
+4. Duplicate (State, District, Level, TRU) row check
+5. State code uniqueness verified
+6. Missing value audit across structural columns
+7. District-level Total row count confirmed (~640)
+8. State count confirmed (~35)
+
+### Cleaning Operations
+
+| Operation | Justification |
+|-----------|---------------|
+| Strip whitespace from string columns | Prevents mismatches in Level/TRU filtering |
+| Drop entirely-empty columns | Trailing placeholder columns contain no data |
+| Convert numeric Census columns to float | Raw data loaded as strings; conversion required |
+| Drop zero/missing TOT_P rows | Rate computations undefined for zero-population records |
+
+### Notable Data Finding
+
+One district — Jaintia Hills (Meghalaya) — shows a **negative Gender Literacy Gap**
+(female literacy exceeds male literacy). This is consistent with the matrilineal
+social structure documented for that region and is retained as valid data.
+No imputation was applied.
+"""
+        )
+
+    # ── Tab 3: Feature Engineering ────────────────────────────────────────────
+    with tabs[2]:
+        st.subheader("Derived Features (14 indicators)")
+        st.markdown(
+            """
+All derived features are computed from raw Census columns using zero-denominator-
+guarded division. Every formula was verified against the Census of India 2011
+definition before implementation.
+
+**Literacy denominators:** The Census defines effective literacy for the
+population aged **7 and above** — children 0–6 are excluded because literacy is
+not enumerated for them. All literacy-rate denominators subtract the 0–6
+age-group column from the corresponding total population.
+
+| Feature | Formula | Notes |
+|---------|---------|-------|
+| `Sex_Ratio` | (TOT_F / TOT_M) × 1 000 | Females per 1,000 males |
+| `Child_Pop_Pct` | (P_06 / TOT_P) × 100 | Children 0–6 as % of total |
+| `SC_Pop_Pct` | (P_SC / TOT_P) × 100 | Scheduled Caste population % |
+| `ST_Pop_Pct` | (P_ST / TOT_P) × 100 | Scheduled Tribe population % |
+| `Literacy_Rate` | (P_LIT / (TOT_P − P_06)) × 100 | Overall literacy, pop 7+ |
+| `Male_Literacy_Rate` | (M_LIT / (TOT_M − M_06)) × 100 | Male literacy, pop 7+ |
+| `Female_Literacy_Rate` | (F_LIT / (TOT_F − F_06)) × 100 | Female literacy, pop 7+ |
+| `Gender_Literacy_Gap` | Male_Literacy_Rate − Female_Literacy_Rate | pp gap; negative = female advantage |
+| `Worker_Participation` | (TOT_WORK_P / TOT_P) × 100 | Overall work participation % |
+| `Female_Worker_Part` | (TOT_WORK_F / TOT_F) × 100 | Female work participation % |
+| `Main_Worker_Pct` | (MAINWORK_P / TOT_WORK_P) × 100 | Main workers % of total workers |
+| `Marginal_Worker_Pct` | (MARGWORK_P / TOT_WORK_P) × 100 | Marginal workers % |
+| `Non_Worker_Pct` | (NON_WORK_P / TOT_P) × 100 | Non-workers % of total population |
+| `Agri_Worker_Pct` | ((MAIN_CL_P + MAIN_AL_P) / TOT_WORK_P) × 100 | Agricultural worker share % |
+
+### Feature Validation
+
+Each derived feature is checked for:
+- NaN values
+- Infinite values
+- Out-of-range values (e.g., rates > 100% or < 0%)
+
+Gender_Literacy_Gap is expected to have negative values (valid) — the validator
+flags this for inspection but does not remove these records.
+"""
+        )
+
+    # ── Tab 4: EDA & Storytelling ─────────────────────────────────────────────
+    with tabs[3]:
+        st.subheader("Exploratory Data Analysis")
+        st.markdown(
+            """
+EDA is performed on the 640 district records using the 14 derived features.
+
+**Analyses performed:**
+- Descriptive statistics (mean, median, std, min, max, IQR) for all features
+- Distribution visualisations (histograms, box plots) for key indicators
+- State-level aggregates (mean indicator values per state)
+- Top-10 and bottom-10 district rankings for Literacy_Rate, Sex_Ratio, and others
+- IQR-based outlier detection for all derived features
+- Pearson correlation matrix across all 14 derived features
+
+**Key EDA findings:**
+- Literacy Rate spans 36.10% (Alirajpur, Madhya Pradesh) to 97.91% (Serchhip, Mizoram)
+- Female Literacy Rate minimum: 30.29% (Alirajpur)
+- Gender Literacy Gap maximum: 34.0 pp (Shravasti, Uttar Pradesh)
+- Child_Pop_Pct vs Literacy_Rate: Pearson r = −0.678 (strongest cross-domain correlation)
+- Agri_Worker_Pct vs Literacy_Rate: Pearson r ≈ −0.40
+- ST_Pop_Pct shows 85 IQR-outlier districts (concentrated in Northeast and Central India)
+
+---
+
+### Analytical Storytelling
+
+The storytelling framework follows the IBM SkillsBuild structure:
+
+**Observations → Insights → Hypotheses → Recommendations**
+
+- **Observations (7):** Factual statements derived programmatically from the dataset
+- **Insights (6):** Analytical interpretations using careful non-causal language
+- **Hypotheses (3):** Explicitly-labelled plausible explanations for observed patterns
+- **Recommendations (3):** Suggested areas for further assessment linked to hypotheses
+
+**Language discipline enforced throughout:**
+✓ "is associated with", "may indicate", "suggests a possible relationship"
+✗ "causes", "leads to", "because of", "proves"
+
+An automated validation function checks all storytelling outputs for causal
+language, structural completeness, and reference integrity.
+"""
+        )
+
+    # ── Tab 5: Machine Learning ───────────────────────────────────────────────
+    with tabs[4]:
+        st.subheader("Machine Learning Pipeline")
+        st.markdown(
+            """
+Three unsupervised ML techniques are applied to the 640 districts using
+11 socioeconomic indicators selected from the 14 derived features.
+
+### Feature Selection for ML
+
+**11 features included:**
+`Sex_Ratio`, `Child_Pop_Pct`, `SC_Pop_Pct`, `ST_Pop_Pct`, `Literacy_Rate`,
+`Female_Literacy_Rate`, `Gender_Literacy_Gap`, `Worker_Participation`,
+`Female_Worker_Part`, `Agri_Worker_Pct`, `Main_Worker_Pct`
+
+**3 features excluded:**
+- `Male_Literacy_Rate` — highly collinear with Literacy_Rate and Female_Literacy_Rate
+- `Non_Worker_Pct` — arithmetic complement of Worker_Participation (r = −1.000)
+- `Marginal_Worker_Pct` — arithmetic complement of Main_Worker_Pct
+
+**Pre-processing:** All 11 features are standardised using `StandardScaler`
+(zero mean, unit variance) before any model is fitted. Identifiers (State,
+District, Name) are never passed to the scaler or model. Random seed = 42 for
+all models.
+
+---
+
+### K-Means Clustering
+
+- Library: `sklearn.cluster.KMeans`
+- K evaluated: 2 through 8
+- K selection criterion: highest silhouette score
+- **Selected K = 4** (silhouette = 0.2232)
+- Cluster labels are neutral integers (Cluster 0, 1, 2, 3)
+
+The silhouette score of 0.2232 indicates moderate cluster separation.
+Districts do not form sharply distinct groups — there is meaningful overlap.
+
+---
+
+### Principal Component Analysis
+
+- Library: `sklearn.decomposition.PCA`
+- Components: full PCA fitted; 2-component projection for visualisation
+- **PC1 explains 34.4%** of total variance
+- **PC2 explains 24.3%** of total variance
+- **PC1 + PC2: 58.7%** combined
+
+PCA is a mathematical transformation — it does not establish causal structure.
+Component loadings describe linear combinations of the 11 indicators only.
+
+---
+
+### Isolation Forest (Anomaly Detection)
+
+- Library: `sklearn.ensemble.IsolationForest`
+- Estimators: 200
+- Contamination: 5% (expected proportion of unusual profiles)
+- **32 districts flagged** as having unusual indicator combinations (5.0%)
+
+"Unusual" means a statistically atypical combination of the 11 indicators —
+not that a district has poor outcomes or is a "problem" district.
+
+---
+
+### Output
+
+All ML results are saved to `data/processed/district_ml_results.csv`
+(640 rows × 20 columns): cluster labels, PCA coordinates, anomaly flags,
+anomaly scores, and the 11 ML feature values.
+
+**Validation:** 12/12 pipeline checks pass (no missing values, no leakage,
+correct scaling, K range confirmed, cluster sizes sum correctly, PCA 2D
+finite, anomaly flags valid).
+"""
+        )
+
+    # ── Tab 6: Limitations ────────────────────────────────────────────────────
+    with tabs[5]:
+        st.subheader("Important Limitations")
+        st.markdown(
+            """
+### Data Limitations
+
+| Limitation | Detail |
+|-----------|--------|
+| **Historical snapshot** | Census data is from 2011. Conditions, populations, and administrative boundaries may have changed substantially since then. Results describe the 2011 dataset only. |
+| **Single data source** | The analysis uses only Census 2011 PCA data. Economic, healthcare, infrastructure, and governance data are absent. Observed patterns cannot be fully contextualised without supplementary datasets. |
+| **District boundaries** | District boundaries and administrative structures may have changed since 2011. Some districts may have been split, merged, or renamed. |
+| **Self-reported literacy** | Literacy status in Census 2011 is self-reported. The methodology for recording literacy may vary across enumerators and regions. |
+| **Worker category definitions** | Census worker categories (Main, Marginal, Cultivator, Agricultural Labourer) reflect the reference period and enumeration methodology of Census 2011. These may not align with other employment datasets. |
+
+---
+
+### Analytical Limitations
+
+| Limitation | Detail |
+|-----------|--------|
+| **Correlation ≠ causation** | All observed associations (e.g., Child_Pop_Pct vs Literacy_Rate) are correlational. No causal claims are supported by this analysis. |
+| **Clusters are exploratory** | K-Means clusters are mathematical groupings based on 11 selected features. They do not represent official socioeconomic categories or development classifications. |
+| **Silhouette score** | The selected K=4 silhouette score of 0.2232 indicates moderate separation. Cluster boundaries are not sharp — many districts sit between cluster centres. |
+| **PCA partial coverage** | PC1 + PC2 explain 58.7% of variance. The remaining 41.3% is not visible in the 2D visualisation. |
+| **Anomaly context** | Isolation Forest anomaly flags identify unusual *feature combinations*, not socioeconomic deficiencies. An unusual profile may reflect a district that is distinctively high-performing on certain indicators, not low-performing. |
+| **Feature selection** | Results depend on the 11 features selected. Different feature sets would produce different clusters and anomaly flags. |
+| **ML not predictive** | No future predictions are made. The ML output describes the 2011 district distribution only. |
+
+---
+
+### Policy Limitation
+
+These analytical outputs are intended for exploratory pattern discovery and
+educational demonstration. They are **not** suitable for policy decisions without:
+- Current data (post-2011)
+- Domain expert review
+- Additional socioeconomic datasets
+- Formal policy evaluation methodology
+"""
+        )
+
+    # ── Tab 7: Reproducibility ────────────────────────────────────────────────
+    with tabs[6]:
+        st.subheader("Reproducibility")
+        st.markdown(
+            f"""
+### Code
+
+The entire project is contained in a **single Python file**:
+`Aarav_IndiDevAI.py`
+
+This file includes all data loading, validation, cleaning, feature engineering,
+EDA, analytical storytelling, machine learning, and the Streamlit application.
+
+### Environment
+
+| Component | Value |
+|-----------|-------|
+| Language | Python 3.9+ |
+| Data processing | pandas, numpy |
+| Visualisation | Plotly (plotly.express, plotly.graph_objects) |
+| Statistical analysis | scipy.stats |
+| Machine learning | scikit-learn (KMeans, PCA, IsolationForest, StandardScaler) |
+| Dashboard | Streamlit |
+| Excel reading | openpyxl |
+| Random seed | {RANDOM_SEED} (all models) |
+
+### Determinism
+
+- All ML models use `random_state={RANDOM_SEED}`.
+- The pipeline is deterministic given the same dataset and package versions.
+- `requirements.txt` documents the package dependencies.
+
+### Running the Project
+
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Run the Streamlit application
+streamlit run Aarav_IndiDevAI.py
+
+# Run the data pipeline and ML pipeline from the command line
+python Aarav_IndiDevAI.py
+```
+
+### Data Files
+
+| File | Description |
+|------|-------------|
+| `data/raw/DDW_PCA0000_2011_Indiastatedist.xlsx` | Original Census data — never modified |
+| `data/processed/district_analysis_ready.csv` | Pipeline output (640 × 75) |
+| `data/processed/district_ml_results.csv` | ML output (640 × 20) |
+
+The processed files are generated automatically when the pipeline runs.
+They do not need to be committed to version control.
+"""
+        )
+
+
 def page_coming_soon(section_name: str):
     """Placeholder page for sections not yet implemented."""
     st.title(f"🚧 {section_name}")
@@ -3402,7 +4318,8 @@ def main():
         "Demographics", "Education", "Employment",
         "Exploratory Analysis",
         "District Clustering", "PCA Visualisation",
-        "Anomaly Detection", "AI-Assisted Insights",
+        "Anomaly Detection", "ML Interpretation",
+        "AI-Assisted Insights",
         "Recommendations", "Methodology / About",
     ]
     selection = st.sidebar.radio("Navigate", sections)
@@ -3454,12 +4371,14 @@ def main():
         page_exploratory_analysis(analysis_df)
     elif selection in ("District Clustering", "PCA Visualisation", "Anomaly Detection"):
         page_machine_learning(analysis_df)
+    elif selection == "ML Interpretation":
+        page_ml_interpretation(analysis_df)
     elif selection == "AI-Assisted Insights":
         page_ai_insights(analysis_df)
     elif selection == "Recommendations":
-        page_coming_soon("Recommendations")
+        page_recommendations(analysis_df)
     elif selection == "Methodology / About":
-        page_coming_soon("Methodology / About")
+        page_methodology()
 
     st.sidebar.markdown("---")
     st.sidebar.caption("IBM SkillsBuild Internship 2026")
