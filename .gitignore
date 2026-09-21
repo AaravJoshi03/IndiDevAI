@@ -179,3 +179,18 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+# -- Project-specific -----------------------------------------
+# Bob / IBM Bob AI assistant temp files
+.bob/
+
+# IDE — VS Code
+.vscode/
+
+# macOS metadata
+.DS_Store
+
+# Generated / exported outputs (do not commit)
+outputs/
+exports/
+
+# NOTE: data/raw/ is intentionally tracked (dataset is part of the project)
