@@ -2555,34 +2555,183 @@ def generate_insights(df: pd.DataFrame) -> dict:
 # SECTION 24 — STREAMLIT DASHBOARD
 # ============================================================
 
+def inject_css():
+    """
+    Inject a minimal, professional CSS layer into the Streamlit app.
+    Targets sidebar grouping headers, metric cards, section rule lines,
+    and page-title colour — no external libraries or files required.
+    """
+    st.markdown(
+        """
+<style>
+/* ── Page title refinement ─────────────────────────────────── */
+h1 { color: #1a2e4a; letter-spacing: -0.5px; }
+h2 { color: #1a2e4a; }
+h3 { color: #2c4a6e; font-size: 1.05rem; }
+
+/* ── Sidebar group labels ──────────────────────────────────── */
+.sidebar-group-label {
+    font-size: 0.70rem;
+    font-weight: 700;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    color: #8899aa;
+    padding: 0.55rem 0 0.15rem 0;
+    margin-bottom: 0;
+    border-top: 1px solid #e5e7eb;
+}
+.sidebar-group-label:first-child { border-top: none; padding-top: 0.1rem; }
+
+/* ── Metric card hover refinement ─────────────────────────── */
+[data-testid="metric-container"] {
+    background: #f7f8fa;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    padding: 0.6rem 1rem;
+}
+
+/* ── Pipeline step strip ───────────────────────────────────── */
+.pipeline-strip {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    flex-wrap: wrap;
+    margin: 0.8rem 0 1.2rem 0;
+}
+.pipeline-step {
+    background: #1a2e4a;
+    color: #ffffff;
+    font-size: 0.78rem;
+    font-weight: 600;
+    padding: 0.30rem 0.70rem;
+    border-radius: 4px;
+    white-space: nowrap;
+}
+.pipeline-arrow {
+    color: #8899aa;
+    font-size: 1.1rem;
+    font-weight: 300;
+    padding: 0 0.05rem;
+}
+
+/* ── Subtle horizontal rule ────────────────────────────────── */
+hr { border: none; border-top: 1px solid #e5e7eb; margin: 1.2rem 0; }
+
+/* ── Data source caption ───────────────────────────────────── */
+.data-note {
+    font-size: 0.78rem;
+    color: #57606a;
+    background: #f7f8fa;
+    border-left: 3px solid #3b82d4;
+    padding: 0.4rem 0.8rem;
+    border-radius: 0 4px 4px 0;
+    margin-top: 0.4rem;
+}
+</style>
+""",
+        unsafe_allow_html=True,
+    )
+
+
 def page_home():
     """Render the Home / Project Overview page."""
-    st.title("🇮🇳 IndiDevAI")
-    st.subheader("AI-Powered District Development Intelligence for India")
-    st.markdown("""
-    **IndiDevAI** analyses Indian district-level demographic, education, and employment
-    characteristics using the **Census of India 2011** — Primary Census Abstract (PCA).
+    st.markdown("# IndiDevAI")
+    st.markdown(
+        "#### AI-Powered District Development Intelligence for India"
+    )
+    st.markdown(
+        '<p class="data-note">'
+        "Data source: Census of India 2011 — Primary Census Abstract (PCA) · "
+        "Office of the Registrar General &amp; Census Commissioner, India · "
+        "Historical snapshot — not current conditions."
+        "</p>",
+        unsafe_allow_html=True,
+    )
 
-    Developed as part of the **IBM SkillsBuild Academic Internship 2026** (Data Analytics with AI).
+    # ── Key dataset metrics ────────────────────────────────────────────────
+    st.markdown("---")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Districts Analysed", "640")
+    m2.metric("States / UTs", "35")
+    m3.metric("Derived Indicators", "14")
+    m4.metric("Census Year", "2011")
 
-    ---
-    ### Application Sections
-    | Section | Description |
-    |---------|-------------|
-    | Dataset Overview | Raw dataset structure, pipeline quality checks |
-    | Demographics | Population, sex ratio, SC/ST distributions |
-    | Education | Literacy rates, gender literacy gap |
-    | Employment | Worker participation, agricultural worker share |
-    | Exploratory Analysis | Correlations, state comparisons, outliers, observations |
-    | District Clustering | K-Means socioeconomic groupings *(upcoming)* |
-    | PCA Visualisation | Dimensionality reduction *(upcoming)* |
-    | Anomaly Detection | Isolation Forest *(upcoming)* |
-    | AI-Assisted Insights | Observations → Insights → Recommendations *(upcoming)* |
+    # ── Pipeline strip ─────────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("**Analytical Pipeline**")
+    st.markdown(
+        """
+<div class="pipeline-strip">
+  <span class="pipeline-step">Raw Census Data</span>
+  <span class="pipeline-arrow">→</span>
+  <span class="pipeline-step">Validate &amp; Clean</span>
+  <span class="pipeline-arrow">→</span>
+  <span class="pipeline-step">Feature Engineering</span>
+  <span class="pipeline-arrow">→</span>
+  <span class="pipeline-step">EDA</span>
+  <span class="pipeline-arrow">→</span>
+  <span class="pipeline-step">Analytical Storytelling</span>
+  <span class="pipeline-arrow">→</span>
+  <span class="pipeline-step">K-Means · PCA · Isolation Forest</span>
+  <span class="pipeline-arrow">→</span>
+  <span class="pipeline-step">District Intelligence</span>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
 
-    ---
-    > **Note:** Census 2011 is a historical snapshot. This application focuses on
-    > pattern discovery and profiling — not future predictions.
-    """)
+    # ── ML results summary ─────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("**Machine Learning Results (Census 2011 Data)**")
+    ml1, ml2, ml3, ml4 = st.columns(4)
+    ml1.metric("K-Means Clusters", "4", help="K=4 selected by highest silhouette score (K=2..8 evaluated)")
+    ml2.metric("Silhouette Score", "0.2232", help="Moderate cluster separation — overlap exists between boundaries")
+    ml3.metric("PCA Variance (PC1+PC2)", "58.7%", help="PC1: 34.4%  PC2: 24.3%")
+    ml4.metric("Unusual Profiles (IF)", "32", help="Isolation Forest — 5% contamination — statistically atypical indicator combinations")
+
+    # ── Section guide ──────────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("**Application Sections**")
+    col_a, col_b, col_c = st.columns(3)
+    with col_a:
+        st.markdown(
+            "**Overview**  \n"
+            "Dataset Overview · Data quality · Pipeline metrics"
+        )
+        st.markdown(
+            "**Demographic Analysis**  \n"
+            "Population · Sex Ratio · SC/ST composition · Child population"
+        )
+        st.markdown(
+            "**Education Analysis**  \n"
+            "Literacy rates · Gender literacy gap · District rankings"
+        )
+    with col_b:
+        st.markdown(
+            "**Employment Analysis**  \n"
+            "Worker participation · Agricultural share · Female workforce"
+        )
+        st.markdown(
+            "**Exploratory Analysis**  \n"
+            "State comparisons · Correlations · Outliers · Observations"
+        )
+        st.markdown(
+            "**AI-Assisted Insights**  \n"
+            "Observations → Insights → Hypotheses → Recommendations"
+        )
+    with col_c:
+        st.markdown(
+            "**Machine Learning**  \n"
+            "K-Means clustering · PCA scatter · Anomaly detection"
+        )
+        st.markdown(
+            "**ML Interpretation &amp; District Explorer**  \n"
+            "Cluster profiles · District-level indicator lookup"
+        )
+        st.markdown(
+            "**Recommendations &amp; Methodology**  \n"
+            "Data-informed next steps · Full pipeline documentation"
+        )
 
 
 def page_dataset_overview(raw_df, district_df, val_report, clean_report,
@@ -4310,19 +4459,46 @@ def main():
     """Streamlit application entry point."""
     st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout=LAYOUT)
 
-    st.sidebar.title("IndiDevAI")
-    st.sidebar.caption("Census of India 2011 — District Analytics")
+    # Inject CSS before any content renders
+    inject_css()
 
-    sections = [
-        "Home", "Dataset Overview",
+    # ── Sidebar ───────────────────────────────────────────────────────────
+    st.sidebar.markdown("## IndiDevAI")
+    st.sidebar.caption("Census of India 2011 · District Analytics")
+    st.sidebar.markdown("---")
+
+    # Grouped navigation using captioned sections
+    st.sidebar.markdown(
+        '<p class="sidebar-group-label">Overview</p>', unsafe_allow_html=True
+    )
+    overview_sections = ["Home", "Dataset Overview"]
+
+    st.sidebar.markdown(
+        '<p class="sidebar-group-label">Analysis</p>', unsafe_allow_html=True
+    )
+    analysis_sections = [
         "Demographics", "Education", "Employment",
-        "Exploratory Analysis",
+        "Exploratory Analysis", "AI-Assisted Insights",
+    ]
+
+    st.sidebar.markdown(
+        '<p class="sidebar-group-label">Machine Learning</p>', unsafe_allow_html=True
+    )
+    ml_sections = [
         "District Clustering", "PCA Visualisation",
         "Anomaly Detection", "ML Interpretation",
-        "AI-Assisted Insights",
-        "Recommendations", "Methodology / About",
+        "Recommendations",
     ]
-    selection = st.sidebar.radio("Navigate", sections)
+
+    st.sidebar.markdown(
+        '<p class="sidebar-group-label">Documentation</p>', unsafe_allow_html=True
+    )
+    doc_sections = ["Methodology / About"]
+
+    sections = (
+        overview_sections + analysis_sections + ml_sections + doc_sections
+    )
+    selection = st.sidebar.radio("Navigate", sections, label_visibility="collapsed")
 
     @st.cache_data(show_spinner="Running data pipeline…")
     def cached_pipeline():
@@ -4381,7 +4557,7 @@ def main():
         page_methodology()
 
     st.sidebar.markdown("---")
-    st.sidebar.caption("IBM SkillsBuild Internship 2026")
+    st.sidebar.caption("IBM SkillsBuild Academic Internship 2026  \nData Analytics with AI")
 
 
 # ============================================================
