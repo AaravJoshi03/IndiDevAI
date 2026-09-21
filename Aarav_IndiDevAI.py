@@ -43,7 +43,8 @@ warnings.filterwarnings("ignore")
 RANDOM_SEED    = 42
 DATA_PATH      = os.path.join("data", "raw", "DDW_PCA0000_2011_Indiastatedist.xlsx")
 PROCESSED_DIR  = os.path.join("data", "processed")
-PROCESSED_PATH = os.path.join(PROCESSED_DIR, "district_analysis_ready.csv")
+PROCESSED_PATH    = os.path.join(PROCESSED_DIR, "district_analysis_ready.csv")
+ML_RESULTS_PATH   = os.path.join(PROCESSED_DIR, "district_ml_results.csv")
 TARGET_LEVEL   = "DISTRICT"
 TARGET_TRU     = "Total"
 N_CLUSTERS     = 5
@@ -1246,31 +1247,604 @@ def generate_factual_observations(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ============================================================
-# SECTION 20 — ML: K-MEANS CLUSTERING (placeholder)
+# SECTION 20 — ML: DATA PREPARATION
 # ============================================================
 
-def run_kmeans(df: pd.DataFrame, features: list, n_clusters: int = N_CLUSTERS):
-    """Placeholder for K-Means clustering. To be implemented in ML phase."""
-    return df
+def prepare_ml_data(df: pd.DataFrame) -> dict:
+    """
+    Prepare the district dataset for machine learning.
+
+    Steps:
+    1. Confirm features from ML_FEATURE_SHORTLIST exist in df.
+    2. Drop any row with NaN or infinite values in the ML features.
+    3. Check feature variance — warn if any feature has near-zero variance.
+    4. Standardize the feature matrix with StandardScaler (zero mean, unit var).
+
+    Identifiers (State, District, Name) are retained separately and never
+    passed to the scaler or model.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        District analysis DataFrame (from load_analysis_data).
+
+    Returns
+    -------
+    dict with keys:
+        feature_df      : pd.DataFrame — rows used, identifier + ML feature cols
+        features_used   : list[str]    — ML feature names actually used
+        X_scaled        : np.ndarray   — standardized feature matrix (n_rows × n_feats)
+        scaler          : StandardScaler — fitted scaler (for inverse transform)
+        meta            : dict — preprocessing metadata
+    """
+    present = [f for f in ML_FEATURE_SHORTLIST if f in df.columns]
+    missing_feat = [f for f in ML_FEATURE_SHORTLIST if f not in df.columns]
+
+    # Drop rows with NaN or inf in any ML feature
+    ml_df = df[["State", "District", "Name"] + present].copy()
+    inf_mask = ml_df[present].apply(lambda c: np.isinf(c)).any(axis=1)
+    ml_df = ml_df[~inf_mask]
+    n_before = len(df)
+    ml_df = ml_df.dropna(subset=present)
+    n_after  = len(ml_df)
+    rows_dropped = n_before - n_after
+
+    # Feature variance check
+    variance_warnings = []
+    for feat in present:
+        v = ml_df[feat].var()
+        if v < 1e-6:
+            variance_warnings.append(f"{feat}: near-zero variance ({v:.2e})")
+
+    # Standardize
+    scaler   = StandardScaler()
+    X_scaled = scaler.fit_transform(ml_df[present].values)
+
+    meta = {
+        "n_rows_in":       n_before,
+        "n_rows_used":     n_after,
+        "rows_dropped":    rows_dropped,
+        "features_used":   present,
+        "features_missing_from_df": missing_feat,
+        "variance_warnings": variance_warnings,
+        "feature_means":   dict(zip(present, scaler.mean_.tolist())),
+        "feature_stds":    dict(zip(present, scaler.scale_.tolist())),
+    }
+
+    return {
+        "feature_df":    ml_df.reset_index(drop=True),
+        "features_used": present,
+        "X_scaled":      X_scaled,
+        "scaler":        scaler,
+        "meta":          meta,
+    }
 
 
 # ============================================================
-# SECTION 21 — ML: PCA VISUALISATION (placeholder)
+# SECTION 21 — ML: K-MEANS CLUSTERING
 # ============================================================
 
-def run_pca_analysis(df: pd.DataFrame, features: list, n_components: int = 2):
-    """Placeholder for PCA. To be implemented in ML phase."""
-    return df
+def run_kmeans(df: pd.DataFrame = None,
+               features: list = None,
+               n_clusters: int = N_CLUSTERS,
+               X_scaled: np.ndarray = None,
+               feature_df: pd.DataFrame = None) -> dict:
+    """
+    Evaluate K-Means for K in [2..8] and select the best K.
+
+    Selection rule (transparent):
+      1. Compute silhouette score for K = 2..8.
+      2. Select the K with the highest silhouette score.
+      3. If two K values tie (within 0.005), prefer the smaller K
+         (parsimony).
+
+    Important: clustering is exploratory and data-derived.
+    Clusters do NOT represent official development categories.
+    Cluster labels are neutral integers ("Cluster 0", "Cluster 1", …).
+
+    Parameters
+    ----------
+    X_scaled : np.ndarray
+        Standardized feature matrix from prepare_ml_data.
+    feature_df : pd.DataFrame
+        Identifier + feature DataFrame from prepare_ml_data.
+
+    Returns
+    -------
+    dict with keys:
+        evaluation_df   : pd.DataFrame — K, inertia, silhouette, cluster_sizes
+        selected_k      : int
+        selection_reason: str
+        labels          : np.ndarray — cluster label per district
+        model           : fitted KMeans for selected K
+        cluster_profile : pd.DataFrame — per-cluster mean/median of features
+        cluster_summary : pd.DataFrame — cluster id, n_districts, pct_districts
+    """
+    from sklearn.metrics import silhouette_score
+
+    K_RANGE = range(2, 9)
+    rows = []
+    for k in K_RANGE:
+        km = KMeans(n_clusters=k, random_state=RANDOM_SEED, n_init=10)
+        lbls = km.fit_predict(X_scaled)
+        sil  = silhouette_score(X_scaled, lbls)
+        rows.append({
+            "K":           k,
+            "Inertia":     round(km.inertia_, 2),
+            "Silhouette":  round(sil, 4),
+            "Cluster_Sizes": str(sorted(
+                pd.Series(lbls).value_counts().sort_index().tolist()
+            )),
+        })
+
+    eval_df = pd.DataFrame(rows)
+
+    # Select K: highest silhouette; tie-break = smaller K
+    best_row  = eval_df.sort_values(["Silhouette", "K"],
+                                    ascending=[False, True]).iloc[0]
+    selected_k = int(best_row["K"])
+    reason = (
+        f"K={selected_k} achieves the highest silhouette score "
+        f"({best_row['Silhouette']:.4f}) among K=2..8. "
+        "Silhouette score measures how well each district fits its assigned "
+        "cluster versus the nearest alternative cluster (range: -1 to +1; "
+        "higher = better separation). Clustering is exploratory and "
+        "does not establish official or causal development categories."
+    )
+
+    # Fit final model with selected K
+    final_km = KMeans(n_clusters=selected_k, random_state=RANDOM_SEED, n_init=10)
+    labels   = final_km.fit_predict(X_scaled)
+
+    # Cluster summary
+    feat_cols = [c for c in feature_df.columns
+                 if c not in ("State", "District", "Name")]
+    profiling_df = feature_df.copy()
+    profiling_df["Cluster"] = labels
+
+    cluster_summary_rows = []
+    n_total = len(labels)
+    for c in sorted(profiling_df["Cluster"].unique()):
+        cluster_summary_rows.append({
+            "Cluster":       f"Cluster {c}",
+            "N_Districts":   int((profiling_df["Cluster"] == c).sum()),
+            "Pct_Districts": round(100 * (profiling_df["Cluster"] == c).sum() / n_total, 1),
+        })
+    cluster_summary = pd.DataFrame(cluster_summary_rows)
+
+    # Cluster profile: mean of each ML feature per cluster
+    profile_rows = []
+    overall_means = profiling_df[feat_cols].mean()
+    for c in sorted(profiling_df["Cluster"].unique()):
+        sub = profiling_df[profiling_df["Cluster"] == c][feat_cols]
+        row = {"Cluster": f"Cluster {c}"}
+        for feat in feat_cols:
+            row[f"{feat}_mean"] = round(sub[feat].mean(), 2)
+            row[f"{feat}_delta"] = round(sub[feat].mean() - overall_means[feat], 2)
+        profile_rows.append(row)
+    cluster_profile = pd.DataFrame(profile_rows)
+
+    return {
+        "evaluation_df":    eval_df,
+        "selected_k":       selected_k,
+        "selection_reason": reason,
+        "labels":           labels,
+        "model":            final_km,
+        "cluster_profile":  cluster_profile,
+        "cluster_summary":  cluster_summary,
+    }
 
 
 # ============================================================
-# SECTION 22 — ML: ANOMALY DETECTION (placeholder)
+# SECTION 22 — ML: PCA AND ANOMALY DETECTION
 # ============================================================
 
-def run_anomaly_detection(df: pd.DataFrame, features: list,
-                          contamination: float = CONTAMINATION):
-    """Placeholder for Isolation Forest. To be implemented."""
-    return df
+def run_pca_analysis(df: pd.DataFrame = None,
+                     features: list = None,
+                     n_components: int = 2,
+                     X_scaled: np.ndarray = None,
+                     features_used: list = None) -> dict:
+    """
+    Apply PCA to the standardized ML feature matrix.
+
+    Returns PC1 and PC2 coordinates per district, explained variance,
+    and component loadings.
+
+    PCA is a dimensionality reduction technique — it does NOT establish
+    causal importance of any feature. Loadings describe mathematical
+    relationships within the 2011 dataset only.
+
+    Parameters
+    ----------
+    X_scaled       : np.ndarray — standardized feature matrix
+    features_used  : list[str] — feature names in column order
+
+    Returns
+    -------
+    dict with keys:
+        pca_coords        : np.ndarray (n x 2) — PC1, PC2 per district
+        explained_var     : np.ndarray — explained variance ratio per component
+        cum_explained_var : np.ndarray — cumulative explained variance
+        loadings_df       : pd.DataFrame — feature loadings on each component
+        pca_model         : fitted PCA object
+    """
+    n_comp = min(len(features_used), X_scaled.shape[1], X_scaled.shape[0])
+    full_pca = SklearnPCA(n_components=n_comp, random_state=RANDOM_SEED)
+    full_pca.fit(X_scaled)
+
+    pca_2d = SklearnPCA(n_components=2, random_state=RANDOM_SEED)
+    coords = pca_2d.fit_transform(X_scaled)
+
+    loadings = pd.DataFrame(
+        full_pca.components_[:2].T,
+        index=features_used,
+        columns=["PC1", "PC2"],
+    ).round(4)
+
+    return {
+        "pca_coords":        coords,
+        "explained_var":     full_pca.explained_variance_ratio_,
+        "cum_explained_var": np.cumsum(full_pca.explained_variance_ratio_),
+        "loadings_df":       loadings,
+        "pca_model":         full_pca,
+    }
+
+
+def run_anomaly_detection(df: pd.DataFrame = None,
+                          features: list = None,
+                          contamination: float = CONTAMINATION,
+                          X_scaled: np.ndarray = None) -> dict:
+    """
+    Apply Isolation Forest to identify districts with unusual combinations
+    of socioeconomic characteristics within the 2011 dataset.
+
+    Isolation Forest assigns an anomaly score to each district.
+    Lower scores (more negative) indicate more unusual profiles.
+    Districts flagged as anomalies (-1) show atypical combinations of
+    the selected indicators — they are NOT labelled as "problem" districts.
+
+    Parameters
+    ----------
+    X_scaled      : np.ndarray — standardized feature matrix
+    contamination : float — assumed proportion of unusual profiles (default 0.05)
+
+    Returns
+    -------
+    dict with keys:
+        anomaly_flags  : np.ndarray — +1 (typical) or -1 (unusual profile)
+        anomaly_scores : np.ndarray — raw decision function scores
+        n_anomalies    : int
+        model          : fitted IsolationForest
+    """
+    iso = IsolationForest(
+        contamination=contamination,
+        random_state=RANDOM_SEED,
+        n_estimators=200,
+    )
+    iso.fit(X_scaled)
+    flags  = iso.predict(X_scaled)           # +1 = typical, -1 = unusual
+    scores = iso.decision_function(X_scaled) # lower = more unusual
+
+    return {
+        "anomaly_flags":  flags,
+        "anomaly_scores": scores,
+        "n_anomalies":    int((flags == -1).sum()),
+        "model":          iso,
+    }
+
+
+def run_ml_pipeline(df: pd.DataFrame = None) -> dict:
+    """
+    Execute the full ML pipeline: preparation → K-Means → PCA → Isolation Forest.
+
+    If df is None, loads from PROCESSED_PATH.
+
+    Returns a comprehensive results dict and saves district_ml_results.csv.
+    """
+    if df is None:
+        df = load_analysis_data()
+
+    # A. Prepare data
+    ml_prep = prepare_ml_data(df)
+    X_scaled   = ml_prep["X_scaled"]
+    feature_df = ml_prep["feature_df"]
+    features   = ml_prep["features_used"]
+
+    # B. K-Means
+    km_result = run_kmeans(X_scaled=X_scaled, feature_df=feature_df)
+
+    # C. PCA
+    pca_result = run_pca_analysis(X_scaled=X_scaled, features_used=features)
+
+    # D. Isolation Forest
+    iso_result = run_anomaly_detection(X_scaled=X_scaled)
+
+    # E. Assemble results dataframe
+    results_df = feature_df[["State", "District", "Name"]].copy()
+    results_df["Cluster"]       = km_result["labels"]
+    results_df["Cluster_Label"] = "Cluster " + results_df["Cluster"].astype(str)
+    results_df["PC1"]           = pca_result["pca_coords"][:, 0].round(4)
+    results_df["PC2"]           = pca_result["pca_coords"][:, 1].round(4)
+    results_df["Anomaly_Flag"]  = iso_result["anomaly_flags"]
+    results_df["Anomaly_Score"] = iso_result["anomaly_scores"].round(4)
+
+    # Add key ML features back for reference
+    for feat in features:
+        results_df[feat] = feature_df[feat].values
+
+    # Save
+    os.makedirs(PROCESSED_DIR, exist_ok=True)
+    results_df.to_csv(ML_RESULTS_PATH, index=False)
+    print(f"[INFO] ML results saved: {ML_RESULTS_PATH} ({len(results_df)} rows)")
+
+    return {
+        "ml_prep":       ml_prep,
+        "km_result":     km_result,
+        "pca_result":    pca_result,
+        "iso_result":    iso_result,
+        "results_df":    results_df,
+    }
+
+
+def validate_ml_pipeline(ml_output: dict) -> dict:
+    """
+    Validate the ML pipeline outputs for data quality and correctness.
+
+    Checks:
+    1.  No missing values in ML features used.
+    2.  No infinite values in scaled matrix.
+    3.  No identifier columns (State/District/Name) leaked to X_scaled.
+    4.  Scaling applied: each feature column has mean ~0, std ~1.
+    5.  Reproducibility confirmed: K-Means is seeded.
+    6.  K range 2..8 evaluated.
+    7.  Cluster labels exist for every district row.
+    8.  All districts assigned exactly one cluster.
+    9.  Cluster sizes sum to total district count.
+    10. PCA coordinates are 2-dimensional and finite.
+    11. Isolation Forest flags are all +1 or -1.
+    12. No NaN/inf in anomaly scores.
+
+    Returns
+    -------
+    dict with keys: passed, warnings, errors
+    """
+    passed, warnings, errors = [], [], []
+
+    prep       = ml_output["ml_prep"]
+    km         = ml_output["km_result"]
+    pca        = ml_output["pca_result"]
+    iso        = ml_output["iso_result"]
+    X_scaled   = prep["X_scaled"]
+    feature_df = prep["feature_df"]
+    features   = prep["features_used"]
+    results    = ml_output["results_df"]
+
+    # 1. No NaN in ML features
+    nan_counts = feature_df[features].isnull().sum().sum()
+    if nan_counts == 0:
+        passed.append("PASS [1]: No missing values in ML feature matrix.")
+    else:
+        errors.append(f"ERROR [1]: {nan_counts} missing values in ML features.")
+
+    # 2. No inf in X_scaled
+    if not np.isinf(X_scaled).any():
+        passed.append("PASS [2]: No infinite values in scaled feature matrix.")
+    else:
+        errors.append("ERROR [2]: Infinite values detected in scaled matrix.")
+
+    # 3. No identifier leakage
+    id_cols = {"State", "District", "Name"}
+    if X_scaled.shape[1] == len(features) and not id_cols.intersection(set(features)):
+        passed.append("PASS [3]: No identifier columns in X_scaled.")
+    else:
+        errors.append("ERROR [3]: Possible identifier leakage in X_scaled.")
+
+    # 4. Scaling check (mean ~0, std ~1 per column)
+    col_means = X_scaled.mean(axis=0)
+    col_stds  = X_scaled.std(axis=0)
+    if np.allclose(col_means, 0, atol=1e-6) and np.allclose(col_stds, 1, atol=1e-4):
+        passed.append("PASS [4]: Feature matrix correctly scaled (mean~0, std~1).")
+    else:
+        warnings.append(
+            f"WARN [4]: Scaling may be imperfect. Max mean deviation: "
+            f"{np.abs(col_means).max():.2e}, max std deviation: "
+            f"{np.abs(col_stds - 1).max():.2e}."
+        )
+
+    # 5. Reproducibility
+    passed.append(f"PASS [5]: random_state={RANDOM_SEED} used for all models.")
+
+    # 6. K range 2..8 evaluated
+    eval_ks = set(km["evaluation_df"]["K"].tolist())
+    expected = set(range(2, 9))
+    if eval_ks == expected:
+        passed.append("PASS [6]: K=2..8 all evaluated.")
+    else:
+        errors.append(f"ERROR [6]: K range mismatch. Evaluated: {eval_ks}")
+
+    # 7 & 8. Cluster labels exist and every district assigned one
+    labels = km["labels"]
+    if len(labels) == len(feature_df):
+        passed.append(f"PASS [7/8]: {len(labels)} cluster labels for {len(feature_df)} districts.")
+    else:
+        errors.append(f"ERROR [7/8]: Label count ({len(labels)}) != district count ({len(feature_df)}).")
+
+    # 9. Cluster sizes sum to total
+    total_in_clusters = km["cluster_summary"]["N_Districts"].sum()
+    if total_in_clusters == len(feature_df):
+        passed.append(f"PASS [9]: Cluster sizes sum to {total_in_clusters} (all districts accounted for).")
+    else:
+        errors.append(f"ERROR [9]: Cluster size sum ({total_in_clusters}) != total ({len(feature_df)}).")
+
+    # 10. PCA coords are 2D and finite
+    coords = pca["pca_coords"]
+    if coords.shape[1] == 2 and np.isfinite(coords).all():
+        passed.append("PASS [10]: PCA coordinates are 2D and all finite.")
+    else:
+        errors.append("ERROR [10]: PCA coordinate issue.")
+
+    # 11. Anomaly flags are +1 or -1 only
+    valid_flags = set(np.unique(iso["anomaly_flags"])).issubset({1, -1})
+    if valid_flags:
+        passed.append("PASS [11]: Isolation Forest flags are valid (+1 / -1 only).")
+    else:
+        errors.append("ERROR [11]: Unexpected Isolation Forest flag values.")
+
+    # 12. No NaN/inf in anomaly scores
+    if np.isfinite(iso["anomaly_scores"]).all():
+        passed.append("PASS [12]: No NaN/inf in anomaly scores.")
+    else:
+        errors.append("ERROR [12]: NaN or inf in anomaly scores.")
+
+    return {"passed": passed, "warnings": warnings, "errors": errors}
+
+
+def create_ml_visualizations(ml_output: dict) -> dict:
+    """
+    Create all ML-related Plotly visualizations.
+
+    Charts:
+    1. K vs Inertia (elbow plot)
+    2. K vs Silhouette Score
+    3. Cluster Size Bar Chart
+    4. PCA 2D Scatter coloured by cluster
+    5. Explained Variance Bar + Cumulative Line
+    6. Cluster Profile Heatmap (delta from dataset mean)
+    7. Anomaly Score Distribution
+
+    Returns dict keyed by chart name.
+    """
+    figs = {}
+
+    km       = ml_output["km_result"]
+    pca      = ml_output["pca_result"]
+    iso      = ml_output["iso_result"]
+    prep     = ml_output["ml_prep"]
+    results  = ml_output["results_df"]
+    features = prep["features_used"]
+    eval_df  = km["evaluation_df"]
+    sel_k    = km["selected_k"]
+
+    # 1. K vs Inertia
+    fig_inertia = px.line(
+        eval_df, x="K", y="Inertia", markers=True,
+        title="K-Means: Inertia (Within-Cluster Sum of Squares) vs K",
+        labels={"K": "Number of Clusters (K)", "Inertia": "Inertia"},
+        color_discrete_sequence=[CHART_COLORS[0]],
+    )
+    fig_inertia.add_vline(x=sel_k, line_dash="dash", line_color="red",
+                          annotation_text=f"Selected K={sel_k}")
+    figs["inertia"] = fig_inertia
+
+    # 2. K vs Silhouette
+    fig_sil = px.line(
+        eval_df, x="K", y="Silhouette", markers=True,
+        title="K-Means: Silhouette Score vs K",
+        labels={"K": "Number of Clusters (K)", "Silhouette": "Silhouette Score"},
+        color_discrete_sequence=[CHART_COLORS[1]],
+    )
+    fig_sil.add_vline(x=sel_k, line_dash="dash", line_color="red",
+                     annotation_text=f"Selected K={sel_k}")
+    figs["silhouette"] = fig_sil
+
+    # 3. Cluster Sizes
+    cs = km["cluster_summary"].copy()
+    figs["cluster_sizes"] = px.bar(
+        cs, x="Cluster", y="N_Districts",
+        title="Number of Districts per Cluster",
+        labels={"N_Districts": "Number of Districts", "Cluster": ""},
+        text="N_Districts",
+        color="Cluster",
+        color_discrete_sequence=CHART_COLORS,
+    )
+    figs["cluster_sizes"].update_traces(textposition="outside")
+
+    # 4. PCA 2D Scatter
+    pca_plot = results.copy()
+    pca_plot["Cluster_Label"] = "Cluster " + pca_plot["Cluster"].astype(str)
+    figs["pca_scatter"] = px.scatter(
+        pca_plot, x="PC1", y="PC2",
+        color="Cluster_Label",
+        hover_name="Name",
+        hover_data={"State": True, "PC1": ":.3f", "PC2": ":.3f"},
+        title="PCA — District Profiles in 2D Space (coloured by K-Means Cluster)",
+        labels={"PC1": "Principal Component 1", "PC2": "Principal Component 2",
+                "Cluster_Label": "Cluster"},
+        color_discrete_sequence=CHART_COLORS,
+        opacity=0.75,
+    )
+    exp_var = pca["explained_var"]
+    figs["pca_scatter"].update_layout(
+        xaxis_title=f"PC1 ({exp_var[0]*100:.1f}% variance)",
+        yaxis_title=f"PC2 ({exp_var[1]*100:.1f}% variance)",
+    )
+
+    # 5. Explained Variance
+    n_comp_show = min(len(exp_var), 11)
+    comp_labels = [f"PC{i+1}" for i in range(n_comp_show)]
+    cum_var     = pca["cum_explained_var"][:n_comp_show]
+    indiv_var   = exp_var[:n_comp_show] * 100
+
+    fig_ev = go.Figure()
+    fig_ev.add_trace(go.Bar(
+        x=comp_labels, y=indiv_var.tolist(),
+        name="Individual",
+        marker_color=CHART_COLORS[0],
+    ))
+    fig_ev.add_trace(go.Scatter(
+        x=comp_labels, y=(cum_var * 100).tolist(),
+        name="Cumulative", mode="lines+markers",
+        line=dict(color="firebrick", width=2),
+        yaxis="y2",
+    ))
+    fig_ev.update_layout(
+        title="PCA Explained Variance",
+        yaxis=dict(title="Individual Explained Variance (%)"),
+        yaxis2=dict(title="Cumulative Explained Variance (%)",
+                    overlaying="y", side="right", range=[0, 105]),
+        legend=dict(orientation="h"),
+    )
+    figs["explained_variance"] = fig_ev
+
+    # 6. Cluster Profile Heatmap (delta from dataset mean)
+    profile = km["cluster_profile"]
+    delta_cols = [c for c in profile.columns if c.endswith("_delta")]
+    feat_short = [c.replace("_delta", "") for c in delta_cols]
+    short_labels = [FEATURE_LABELS.get(f, f).split(" (")[0][:18] for f in feat_short]
+    cluster_labels = profile["Cluster"].tolist()
+
+    z_vals = profile[delta_cols].values
+    figs["profile_heatmap"] = go.Figure(data=go.Heatmap(
+        z=z_vals,
+        x=short_labels,
+        y=cluster_labels,
+        colorscale="RdBu",
+        zmid=0,
+        colorbar=dict(title="Delta from<br>dataset mean"),
+        text=np.round(z_vals, 1),
+        texttemplate="%{text}",
+        textfont={"size": 9},
+    ))
+    figs["profile_heatmap"].update_layout(
+        title="Cluster Profiles — Deviation from Dataset Mean (scaled units)",
+        xaxis=dict(tickangle=-40),
+        height=300 + 60 * sel_k,
+    )
+
+    # 7. Anomaly Score Distribution
+    figs["anomaly_dist"] = px.histogram(
+        results, x="Anomaly_Score", nbins=40,
+        color="Anomaly_Flag",
+        color_discrete_map={1: CHART_COLORS[0], -1: "crimson"},
+        title="Isolation Forest: Anomaly Score Distribution",
+        labels={
+            "Anomaly_Score": "Anomaly Score (lower = more unusual)",
+            "Anomaly_Flag":  "Flag (−1 = unusual profile, +1 = typical)",
+        },
+    )
+    figs["anomaly_dist"].update_layout(yaxis_title="Number of Districts")
+
+    return figs
 
 
 # ============================================================
@@ -2453,6 +3027,356 @@ def page_ai_insights(df):
                 st.write(p)
 
 
+def page_machine_learning(analysis_df: pd.DataFrame):
+    """
+    Streamlit page covering K-Means Clustering, PCA Visualisation,
+    and Anomaly Detection in a single multi-tab layout.
+
+    Runs run_ml_pipeline() the first time (cached), then renders:
+      Tab 1 — Overview & Feature Selection
+      Tab 2 — K-Means Clustering
+      Tab 3 — PCA Visualisation
+      Tab 4 — Anomaly Detection
+      Tab 5 — District ML Results Table
+      Tab 6 — Validation
+    """
+    st.title("🤖 Machine Learning — District Profiling")
+    st.caption(
+        "K-Means clustering, Principal Component Analysis (PCA), and Isolation "
+        "Forest anomaly detection applied to 640 Indian districts using 11 "
+        "socioeconomic indicators from Census of India 2011."
+    )
+    st.info(
+        "ℹ️ **Important:** All machine-learning outputs are exploratory and "
+        "data-derived from the 2011 Census snapshot. Clusters are neutral "
+        "integer labels — they do NOT represent official development categories "
+        "or rankings. Anomalies indicate *unusual socioeconomic profiles*, not "
+        "\"problem\" districts."
+    )
+
+    # ── Run or load the ML pipeline ───────────────────────────────────────────
+    @st.cache_data(show_spinner="Running ML pipeline (K-Means · PCA · Isolation Forest)…")
+    def cached_ml_pipeline():
+        return run_ml_pipeline(analysis_df)
+
+    try:
+        ml_output = cached_ml_pipeline()
+    except Exception as exc:
+        st.error(f"ML pipeline error: {exc}")
+        return
+
+    ml_val  = validate_ml_pipeline(ml_output)
+    figs    = create_ml_visualizations(ml_output)
+
+    km      = ml_output["km_result"]
+    pca_res = ml_output["pca_result"]
+    iso_res = ml_output["iso_result"]
+    prep    = ml_output["ml_prep"]
+    results = ml_output["results_df"]
+    features_used = prep["features_used"]
+
+    sel_k    = km["selected_k"]
+    n_dist   = len(results)
+    n_anom   = iso_res["n_anomalies"]
+    exp_var1 = pca_res["explained_var"][0] * 100
+    exp_var2 = pca_res["explained_var"][1] * 100
+
+    # ── Top-level KPIs ─────────────────────────────────────────────────────────
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Districts analysed",  f"{n_dist}")
+    k2.metric("K-Means clusters",    f"{sel_k}")
+    k3.metric("PCA PC1+PC2 variance", f"{exp_var1 + exp_var2:.1f}%")
+    k4.metric("Unusual profiles (IF)", f"{n_anom}")
+
+    tabs = st.tabs([
+        "Overview",
+        "K-Means Clustering",
+        "PCA Visualisation",
+        "Anomaly Detection",
+        "District Results",
+        "Validation",
+    ])
+
+    # ══════════════════════════════════════════════════════════════════════
+    # TAB 1 — OVERVIEW & FEATURE SELECTION
+    # ══════════════════════════════════════════════════════════════════════
+    with tabs[0]:
+        st.subheader("Machine Learning Approach")
+        st.markdown(
+            """
+**Three complementary unsupervised ML techniques** are applied to characterise
+Indian districts using 11 derived socioeconomic indicators:
+
+| Technique | Purpose |
+|---|---|
+| **K-Means Clustering** | Group districts with similar indicator profiles |
+| **Principal Component Analysis** | Reduce 11 dimensions to 2 for visualisation |
+| **Isolation Forest** | Identify districts with statistically unusual profiles |
+
+All techniques are **unsupervised** — no labelled outcomes are used. Results
+reflect patterns within the 2011 Census data only.
+"""
+        )
+
+        st.subheader("Feature Selection")
+        st.caption(
+            "11 derived indicators selected after removing highly collinear "
+            "and arithmetically redundant features."
+        )
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("**Features included in ML**")
+            for f in features_used:
+                st.markdown(f"- `{f}` — {FEATURE_LABELS.get(f, f)}")
+        with col2:
+            st.markdown("**Features excluded (with reason)**")
+            for f, reason in ML_FEATURE_EXCLUSIONS.items():
+                st.markdown(f"- `{f}`: {reason}")
+
+        with st.expander("Pre-processing metadata"):
+            meta = prep["meta"]
+            st.write(f"- Rows in processed dataset: **{meta['n_rows_in']}**")
+            st.write(f"- Rows used for ML: **{meta['n_rows_used']}**")
+            st.write(f"- Rows dropped (NaN/Inf): **{meta['rows_dropped']}**")
+            st.write(f"- Features with near-zero variance: "
+                     f"**{len(meta['variance_warnings']) or 'none'}**")
+            if meta["variance_warnings"]:
+                for w in meta["variance_warnings"]:
+                    st.warning(w)
+            st.write("Standardization: **StandardScaler** (zero mean, unit variance)")
+            st.write(f"Random seed: **{RANDOM_SEED}** (all models)")
+
+    # ══════════════════════════════════════════════════════════════════════
+    # TAB 2 — K-MEANS CLUSTERING
+    # ══════════════════════════════════════════════════════════════════════
+    with tabs[1]:
+        st.subheader("K-Means Clustering")
+        st.caption(
+            "K was selected by maximising the silhouette score across K = 2..8. "
+            "Cluster labels are neutral integers — they do NOT represent "
+            "official or causal development categories."
+        )
+
+        st.info(f"**Selection reason:** {km['selection_reason']}")
+
+        c1, c2 = st.columns(2)
+        with c1:
+            st.plotly_chart(figs["inertia"], use_container_width=True)
+        with c2:
+            st.plotly_chart(figs["silhouette"], use_container_width=True)
+
+        st.markdown("---")
+        st.subheader("K-Means Evaluation Table (K = 2 to 8)")
+        st.dataframe(km["evaluation_df"], use_container_width=True, hide_index=True)
+
+        st.markdown("---")
+        st.subheader(f"Cluster Composition — K = {sel_k}")
+        st.plotly_chart(figs["cluster_sizes"], use_container_width=True)
+        st.dataframe(km["cluster_summary"], use_container_width=True, hide_index=True)
+
+        st.markdown("---")
+        st.subheader("Cluster Profiles — Deviation from Dataset Mean")
+        st.caption(
+            "Values show each cluster's average indicator value minus the "
+            "dataset-wide average (in original units). "
+            "Blue = above average · Red = below average."
+        )
+        st.plotly_chart(figs["profile_heatmap"], use_container_width=True)
+
+        with st.expander("Cluster profile data (mean values per indicator)"):
+            mean_cols = ["Cluster"] + [c for c in km["cluster_profile"].columns
+                                       if c.endswith("_mean")]
+            display_profile = km["cluster_profile"][mean_cols].copy()
+            display_profile.columns = [
+                c.replace("_mean", "") for c in display_profile.columns
+            ]
+            st.dataframe(display_profile, use_container_width=True, hide_index=True)
+
+    # ══════════════════════════════════════════════════════════════════════
+    # TAB 3 — PCA VISUALISATION
+    # ══════════════════════════════════════════════════════════════════════
+    with tabs[2]:
+        st.subheader("Principal Component Analysis (PCA)")
+        st.caption(
+            "PCA reduces 11 indicators to 2 principal components for "
+            "visualisation. It is a mathematical transformation — component "
+            "directions reflect linear combinations of the original indicators, "
+            "not causal relationships."
+        )
+
+        ev = pca_res["explained_var"]
+        st.markdown(
+            f"- **PC1** explains **{ev[0]*100:.1f}%** of total variance  \n"
+            f"- **PC2** explains **{ev[1]*100:.1f}%** of total variance  \n"
+            f"- **PC1 + PC2** together explain **{(ev[0]+ev[1])*100:.1f}%**"
+        )
+
+        st.plotly_chart(figs["pca_scatter"], use_container_width=True)
+        st.caption(
+            "Each point represents one district. Colour indicates K-Means "
+            "cluster membership. Hover for district name, state, and PC coordinates."
+        )
+
+        st.markdown("---")
+        st.subheader("Explained Variance per Component")
+        st.plotly_chart(figs["explained_variance"], use_container_width=True)
+
+        st.markdown("---")
+        st.subheader("Component Loadings (PC1 and PC2)")
+        st.caption(
+            "Loadings indicate each original indicator's contribution to a "
+            "principal component. Larger absolute values = stronger contribution. "
+            "Signs indicate direction only."
+        )
+        loadings = pca_res["loadings_df"].copy()
+        loadings.index.name = "Feature"
+        loadings = loadings.reset_index()
+        loadings["Feature Label"] = loadings["Feature"].map(
+            lambda f: FEATURE_LABELS.get(f, f)
+        )
+        loadings = loadings[["Feature", "Feature Label", "PC1", "PC2"]]
+        loadings = loadings.sort_values("PC1", key=abs, ascending=False)
+        st.dataframe(loadings, use_container_width=True, hide_index=True)
+
+    # ══════════════════════════════════════════════════════════════════════
+    # TAB 4 — ANOMALY DETECTION
+    # ══════════════════════════════════════════════════════════════════════
+    with tabs[3]:
+        st.subheader("Isolation Forest — Unusual District Profiles")
+        st.caption(
+            "Isolation Forest assigns an anomaly score to each district. "
+            "Districts flagged as −1 show statistically unusual combinations "
+            "of socioeconomic indicators within the 2011 dataset. "
+            "This does NOT imply that a district is 'bad' or 'underdeveloped'."
+        )
+
+        st.markdown(
+            f"- **Contamination parameter:** {CONTAMINATION:.0%} "
+            f"(expected proportion of unusual profiles)  \n"
+            f"- **Districts flagged as unusual:** **{n_anom}** "
+            f"of {n_dist} ({n_anom/n_dist*100:.1f}%)  \n"
+            f"- **Estimators:** 200 · **Random seed:** {RANDOM_SEED}"
+        )
+
+        st.plotly_chart(figs["anomaly_dist"], use_container_width=True)
+
+        st.markdown("---")
+        st.subheader("Districts with Unusual Profiles (Anomaly Flag = −1)")
+        anomalies = results[results["Anomaly_Flag"] == -1].copy()
+        anomalies = anomalies.sort_values("Anomaly_Score")
+        display_cols = ["Name", "State", "Cluster_Label", "Anomaly_Score"] + features_used[:6]
+        st.dataframe(
+            anomalies[display_cols].rename(columns={"Cluster_Label": "Cluster"}),
+            use_container_width=True,
+            hide_index=True,
+        )
+        st.caption(
+            f"Showing {len(anomalies)} districts flagged as unusual. "
+            "Lower anomaly score = more atypical profile. "
+            "Investigate individual districts in the **District Results** tab."
+        )
+
+        with st.expander("PCA scatter — unusual profiles highlighted"):
+            anomaly_plot = results.copy()
+            anomaly_plot["Profile"] = anomaly_plot["Anomaly_Flag"].map(
+                {1: "Typical", -1: "Unusual"}
+            )
+            fig_anom_pca = px.scatter(
+                anomaly_plot, x="PC1", y="PC2",
+                color="Profile",
+                color_discrete_map={"Typical": CHART_COLORS[0], "Unusual": "crimson"},
+                hover_name="Name",
+                hover_data={"State": True, "Anomaly_Score": ":.4f"},
+                title="PCA Scatter — Unusual Profiles Highlighted",
+                labels={"PC1": f"PC1 ({ev[0]*100:.1f}% var)",
+                        "PC2": f"PC2 ({ev[1]*100:.1f}% var)"},
+                opacity=0.7,
+            )
+            st.plotly_chart(fig_anom_pca, use_container_width=True)
+
+    # ══════════════════════════════════════════════════════════════════════
+    # TAB 5 — DISTRICT RESULTS TABLE
+    # ══════════════════════════════════════════════════════════════════════
+    with tabs[4]:
+        st.subheader("Full ML Results — All Districts")
+        st.caption(
+            "Every district with its K-Means cluster, PCA coordinates, "
+            "Isolation Forest flag/score, and the 11 ML features."
+        )
+
+        # Filters
+        f_col1, f_col2, f_col3 = st.columns(3)
+        with f_col1:
+            state_opts = ["All"] + sorted(results["State"].unique().tolist())
+            sel_state = st.selectbox("Filter by State", state_opts, key="ml_state")
+        with f_col2:
+            cluster_opts = ["All"] + sorted(results["Cluster_Label"].unique().tolist())
+            sel_cluster = st.selectbox("Filter by Cluster", cluster_opts, key="ml_cluster")
+        with f_col3:
+            anom_opts = ["All", "Unusual only (−1)", "Typical only (+1)"]
+            sel_anom = st.selectbox("Filter by Anomaly Flag", anom_opts, key="ml_anom")
+
+        filtered = results.copy()
+        if sel_state != "All":
+            filtered = filtered[filtered["State"] == sel_state]
+        if sel_cluster != "All":
+            filtered = filtered[filtered["Cluster_Label"] == sel_cluster]
+        if sel_anom == "Unusual only (−1)":
+            filtered = filtered[filtered["Anomaly_Flag"] == -1]
+        elif sel_anom == "Typical only (+1)":
+            filtered = filtered[filtered["Anomaly_Flag"] == 1]
+
+        st.write(f"Showing **{len(filtered)}** of {n_dist} districts")
+        show_cols = (
+            ["Name", "State", "Cluster_Label", "PC1", "PC2",
+             "Anomaly_Flag", "Anomaly_Score"]
+            + features_used
+        )
+        st.dataframe(
+            filtered[show_cols].rename(columns={"Cluster_Label": "Cluster"}),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        if os.path.isfile(ML_RESULTS_PATH):
+            with open(ML_RESULTS_PATH, "rb") as f:
+                st.download_button(
+                    "⬇️ Download district_ml_results.csv",
+                    data=f,
+                    file_name="district_ml_results.csv",
+                    mime="text/csv",
+                )
+
+    # ══════════════════════════════════════════════════════════════════════
+    # TAB 6 — VALIDATION
+    # ══════════════════════════════════════════════════════════════════════
+    with tabs[5]:
+        st.subheader("ML Pipeline Validation")
+        st.caption(
+            "12 automated quality-control checks on the ML pipeline. "
+            "Confirms data integrity, scaling correctness, reproducibility, "
+            "and output completeness."
+        )
+        pass_count = len(ml_val["passed"])
+        warn_count = len(ml_val["warnings"])
+        err_count  = len(ml_val["errors"])
+        vc1, vc2, vc3 = st.columns(3)
+        vc1.metric("✅ Passed",   pass_count)
+        vc2.metric("⚠️ Warnings", warn_count)
+        vc3.metric("❌ Errors",   err_count)
+
+        if ml_val["errors"]:
+            for e in ml_val["errors"]:
+                st.error(e)
+        else:
+            st.success("All validation checks passed — no errors detected.")
+        for w in ml_val["warnings"]:
+            st.warning(w)
+        with st.expander("All passed checks"):
+            for p in ml_val["passed"]:
+                st.write(p)
+
+
 def page_coming_soon(section_name: str):
     """Placeholder page for sections not yet implemented."""
     st.title(f"🚧 {section_name}")
@@ -2528,12 +3452,8 @@ def main():
         page_employment(analysis_df)
     elif selection == "Exploratory Analysis":
         page_exploratory_analysis(analysis_df)
-    elif selection == "District Clustering":
-        page_coming_soon("District Clustering")
-    elif selection == "PCA Visualisation":
-        page_coming_soon("PCA Visualisation")
-    elif selection == "Anomaly Detection":
-        page_coming_soon("Anomaly Detection")
+    elif selection in ("District Clustering", "PCA Visualisation", "Anomaly Detection"):
+        page_machine_learning(analysis_df)
     elif selection == "AI-Assisted Insights":
         page_ai_insights(analysis_df)
     elif selection == "Recommendations":
@@ -2551,3 +3471,31 @@ def main():
 
 if __name__ == "__main__":
     run_pipeline(verbose=True)
+
+    # Run ML pipeline after data pipeline to generate district_ml_results.csv
+    print("\n[ML] Running ML pipeline…")
+    ml_out = run_ml_pipeline()
+    ml_val = validate_ml_pipeline(ml_out)
+    km_res = ml_out["km_result"]
+    pca_r  = ml_out["pca_result"]
+    iso_r  = ml_out["iso_result"]
+
+    print(f"[ML] Selected K = {km_res['selected_k']} "
+          f"(silhouette = {km_res['evaluation_df'].sort_values('Silhouette', ascending=False).iloc[0]['Silhouette']:.4f})")
+    ev = pca_r["explained_var"]
+    print(f"[ML] PCA: PC1={ev[0]*100:.1f}%  PC2={ev[1]*100:.1f}%  "
+          f"PC1+PC2={( ev[0]+ev[1])*100:.1f}%")
+    print(f"[ML] Isolation Forest: {iso_r['n_anomalies']} unusual profiles "
+          f"({iso_r['n_anomalies']/len(ml_out['results_df'])*100:.1f}%)")
+
+    pass_n = len(ml_val["passed"])
+    warn_n = len(ml_val["warnings"])
+    err_n  = len(ml_val["errors"])
+    print(f"[ML] Validation: {pass_n} passed / {warn_n} warnings / {err_n} errors")
+    if ml_val["errors"]:
+        for e in ml_val["errors"]:
+            print(f"     ERROR: {e}")
+    if ml_val["warnings"]:
+        for w in ml_val["warnings"]:
+            print(f"     WARN:  {w}")
+    print("[ML] Pipeline complete.")

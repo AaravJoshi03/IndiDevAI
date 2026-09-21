@@ -171,7 +171,7 @@ All derived features are computed in [`engineer_features()`](Aarav_IndiDevAI.py)
 
 ---
 
-## Planned Methodology
+## Methodology
 
 ```
 Raw Excel Data
@@ -209,16 +209,35 @@ Feature Engineering (derived indicators: literacy rate, sex ratio, etc.)
 
 ---
 
-## Planned ML Techniques
+## ML Techniques
 
-| Technique | Purpose |
-|-----------|---------|
-| **K-Means Clustering** | Group districts with similar socioeconomic profiles |
-| **Principal Component Analysis (PCA)** | Reduce dimensionality; visualise district positioning |
-| **Isolation Forest** | Detect districts with unusual indicator patterns |
+| Technique | Library | Purpose |
+|-----------|---------|---------|
+| **K-Means Clustering** | scikit-learn | Group districts with similar socioeconomic profiles |
+| **Principal Component Analysis (PCA)** | scikit-learn | Reduce 11 dimensions to 2; visualise district positioning |
+| **Isolation Forest** | scikit-learn | Detect districts with unusual indicator combinations |
 
-> **Scope note:** The ML focus is on district profiling and pattern discovery using
-> historical 2011 data. No future predictions are made.
+> **Scope note:** All ML is unsupervised and exploratory. The focus is on district
+> profiling and pattern discovery using historical 2011 data. No future predictions
+> are made.
+
+### ML Feature Shortlist (11 indicators)
+
+| Feature | Description |
+|---------|-------------|
+| `Sex_Ratio` | Females per 1,000 males |
+| `Child_Pop_Pct` | Population aged 0–6 as % of total |
+| `SC_Pop_Pct` | Scheduled Caste population % |
+| `ST_Pop_Pct` | Scheduled Tribe population % |
+| `Literacy_Rate` | Overall literacy rate (pop 7+) |
+| `Female_Literacy_Rate` | Female literacy rate (pop 7+) |
+| `Gender_Literacy_Gap` | Male literacy rate − Female literacy rate (pp) |
+| `Worker_Participation` | Total workers as % of total population |
+| `Female_Worker_Part` | Female workers as % of female population |
+| `Agri_Worker_Pct` | (Cultivators + Agricultural labourers) as % of total workers |
+| `Main_Worker_Pct` | Main workers as % of total workers |
+
+**Excluded features:** `Male_Literacy_Rate` (collinear), `Non_Worker_Pct` (arithmetic complement of Worker_Participation), `Marginal_Worker_Pct` (complement of Main_Worker_Pct).
 
 ---
 
@@ -228,17 +247,16 @@ Feature Engineering (derived indicators: literacy rate, sex ratio, etc.)
 |---|---------|--------|
 | 1 | Home / Project Overview | ✅ Implemented |
 | 2 | Dataset Overview | ✅ Implemented |
-| 3 | Demographics | 🔲 Planned |
-| 4 | Education | 🔲 Planned |
-| 5 | Employment | 🔲 Planned |
-| 6 | District Comparison | 🔲 Planned |
-| 7 | Exploratory Analysis | 🔲 Planned |
-| 8 | District Clustering | 🔲 Planned |
-| 9 | PCA Visualisation | 🔲 Planned |
-| 10 | Anomaly Detection | 🔲 Planned |
-| 11 | AI-Assisted Insights | 🔲 Planned |
-| 12 | Recommendations | 🔲 Planned |
-| 13 | Methodology / About | 🔲 Planned |
+| 3 | Demographics | ✅ Implemented |
+| 4 | Education | ✅ Implemented |
+| 5 | Employment | ✅ Implemented |
+| 6 | Exploratory Analysis | ✅ Implemented |
+| 7 | District Clustering | ✅ Implemented |
+| 8 | PCA Visualisation | ✅ Implemented |
+| 9 | Anomaly Detection | ✅ Implemented |
+| 10 | AI-Assisted Insights | ✅ Implemented |
+| 11 | Recommendations | 🔲 Planned |
+| 12 | Methodology / About | 🔲 Planned |
 
 ---
 
@@ -248,8 +266,11 @@ Feature Engineering (derived indicators: literacy rate, sex ratio, etc.)
 IndiDevAI/
 │
 ├── data/
-│   └── raw/
-│       └── DDW_PCA0000_2011_Indiastatedist.xlsx
+│   ├── raw/
+│   │   └── DDW_PCA0000_2011_Indiastatedist.xlsx   ← Original Census data (read-only)
+│   └── processed/
+│       ├── district_analysis_ready.csv            ← 640 districts × 75 columns (pipeline output)
+│       └── district_ml_results.csv               ← 640 districts × 20 columns (ML output)
 │
 ├── Aarav_IndiDevAI.py       ← Single project code file (Streamlit app)
 │
@@ -299,22 +320,48 @@ The application will open in your default browser at `http://localhost:8501`.
 **Phase 1 — Project Initialisation: ✅ Complete**
 
 - Repository structure established
-- Dataset inspected and moved to `data/raw/`
+- Dataset inspected and confirmed: 2,028 rows × 94 columns, 640 DISTRICT/Total records
 - `Aarav_IndiDevAI.py` created with full section scaffold
 
 **Phase 2 — Data Validation, Cleaning & Feature Engineering: ✅ Complete**
 
-- `load_dataset()` — file-existence check, structural column validation
-- `validate_dataset()` — 8-point quality check (dimensions, Level/TRU uniques, duplicates, missing values, state codes)
-- `clean_dataset()` — empty-column removal, numeric type conversion, negative-value audit
-- `filter_district_data()` — Level==DISTRICT & TRU==Total filter, duplicate-key check, zero-population removal
+- `load_dataset()`, `validate_dataset()` — 8-point quality check
+- `clean_dataset()`, `filter_district_data()` — 640 district records, 0 duplicates
 - `engineer_features()` — 14 derived socioeconomic indicators (Census-correct denominators)
-- `validate_features()` — NaN / Inf / out-of-range checks for all derived features
-- `save_processed_data()` — writes `data/processed/district_analysis_ready.csv`
-- Pipeline verified: 640 districts, 35 states/UTs, 0 duplicates, 0 infinite values
-- One notable finding: Jaintia Hills (Meghalaya) shows negative Gender_Literacy_Gap — female literacy exceeds male; retained as valid data
+- `validate_features()` — NaN / Inf / out-of-range checks
+- Output: `data/processed/district_analysis_ready.csv` (640 rows × 75 columns)
+- Notable: Jaintia Hills (Meghalaya) has negative Gender_Literacy_Gap (female literacy exceeds male) — retained as valid
 
-Next phase: Demographics, Education, and Employment Streamlit dashboard sections.
+**Phase 3 — EDA: ✅ Complete**
+
+- Descriptive statistics across demographics, education, employment
+- Distribution and outlier analysis (IQR-based)
+- Correlation matrix (Pearson) across all derived features
+- State-level aggregates; top/bottom district rankings
+- 57 programmatic observations generated from data
+- Key finding: Literacy Rate range 36.10% (Alirajpur) – 97.91% (Serchhip)
+- Key finding: Child_Pop_Pct vs Literacy_Rate correlation r = −0.678
+- Streamlit pages: Demographics, Education, Employment, Exploratory Analysis
+
+**Phase 4 — AI-Assisted Analytical Storytelling: ✅ Complete**
+
+- Framework: Observations → Insights → Hypotheses → Recommendations
+- 7 observations, 6 insights, 3 explicitly-labelled hypotheses, 3 recommendations
+- Automated validation (28 checks) — 0 causal-language violations, 0 fabricated values
+- Language discipline enforced: "is associated with", "may indicate", "suggests"
+- Streamlit page: AI-Assisted Insights
+
+**Phase 5 — Machine Learning: ✅ Complete**
+
+- `prepare_ml_data()` — StandardScaler, variance checks, 11-feature shortlist
+- `run_kmeans()` — K=2..8 silhouette evaluation; **K=4 selected** (silhouette=0.2232)
+- `run_pca_analysis()` — full PCA; **PC1=34.4%, PC2=24.3%** (58.7% combined)
+- `run_anomaly_detection()` — Isolation Forest (200 estimators); **32 unusual profiles** (5.0%)
+- `validate_ml_pipeline()` — 12 checks, all passed
+- Output: `data/processed/district_ml_results.csv` (640 rows × 20 columns)
+- Streamlit pages: District Clustering, PCA Visualisation, Anomaly Detection (unified multi-tab page)
+
+**Next:** Recommendations page, Methodology / About page, Project Report (.docx)
 
 ---
 
