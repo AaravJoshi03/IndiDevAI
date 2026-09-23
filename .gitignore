@@ -194,3 +194,10 @@ outputs/
 exports/
 
 # NOTE: data/raw/ is intentionally tracked (dataset is part of the project)
+
+# Temporary MS Word lock files
+~$*.docx
+
+# Local AI assistant / agent skills and artifacts
+.agents/
+.claude/
