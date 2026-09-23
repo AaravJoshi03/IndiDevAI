@@ -5,7 +5,7 @@
 # IBM SkillsBuild Academic Internship 2026
 # Data Analytics with AI
 #
-# Author  : Aarav
+# Author  : Aarav Joshi
 # Dataset : Primary Census Abstract (PCA), India & States/UTs
 #           State and District Level, Census of India 2011
 # Source  : Office of the Registrar General & Census Commissioner, India
@@ -4115,7 +4115,7 @@ unusual profiles across demographic, education, and employment dimensions.
 
 | Component | Description |
 |-----------|-------------|
-| `Aarav_IndiDevAI.py` | Single Python file containing the complete project and Streamlit application |
+| `AaravJoshi_IndiDevAI.py` | Single Python file containing the complete project and Streamlit application |
 | `requirements.txt` | Python package dependencies |
 | `data/processed/district_analysis_ready.csv` | Cleaned and feature-engineered district dataset (640 × 75) |
 | `data/processed/district_ml_results.csv` | ML outputs: cluster labels, PCA coordinates, anomaly scores (640 × 20) |
@@ -4391,7 +4391,7 @@ educational demonstration. They are **not** suitable for policy decisions withou
 ### Code
 
 The entire project is contained in a **single Python file**:
-`Aarav_IndiDevAI.py`
+`AaravJoshi_IndiDevAI.py`
 
 This file includes all data loading, validation, cleaning, feature engineering,
 EDA, analytical storytelling, machine learning, and the Streamlit application.
@@ -4422,10 +4422,10 @@ EDA, analytical storytelling, machine learning, and the Streamlit application.
 pip install -r requirements.txt
 
 # Run the Streamlit application
-streamlit run Aarav_IndiDevAI.py
+streamlit run AaravJoshi_IndiDevAI.py
 
 # Run the data pipeline and ML pipeline from the command line
-python Aarav_IndiDevAI.py
+python AaravJoshi_IndiDevAI.py
 ```
 
 ### Data Files

@@ -125,15 +125,15 @@ IndiDevAI/
 │   └── processed/
 │       ├── district_analysis_ready.csv
 │       └── district_ml_results.csv
-├── Aarav_IndiDevAI.py
-├── Aarav_IndiDevAI_ProjectReport.docx
+├── AaravJoshi_IndiDevAI.py
+├── AaravJoshi_ProjectReport.docx
 ├── README.md
 ├── requirements.txt
 ├── LICENSE
 └── .gitignore
 ```
 
-Aarav_IndiDevAI.py contains the complete Streamlit application and project logic in a single Python file.
+AaravJoshi_IndiDevAI.py contains the complete Streamlit application and project logic in a single Python file.
 
 ## 8. Setup and Run Instructions
 
@@ -160,7 +160,7 @@ pip install -r requirements.txt
 
 ### Run the application
 ```bash
-python -m streamlit run Aarav_IndiDevAI.py
+python -m streamlit run AaravJoshi_IndiDevAI.py
 ```
 
 The application will be available at:
